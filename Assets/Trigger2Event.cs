@@ -8,7 +8,7 @@ public class Trigger2Event : MonoBehaviour
     [Header("旧怪異オブジェクト（初期非表示維持用）")]
     public GameObject shadow2;
 
-    [Header("旅館の出口")]
+    [Header("旅館の出口（旧設定・未設定でも可）")]
     public Transform exitPoint;
     public float exitDistance = 2f;
 
@@ -31,6 +31,7 @@ public class Trigger2Event : MonoBehaviour
 
     GameProgress progress;
     Transform player;
+    InnExtensionBuilder extension;
     readonly List<GameObject> crowd = new List<GameObject>();
 
     bool started;
@@ -44,6 +45,7 @@ public class Trigger2Event : MonoBehaviour
     void Awake()
     {
         progress = FindAnyObjectByType<GameProgress>();
+        extension = InnExtensionBuilder.EnsureBuilt();
 
         if (shadow2 != null)
             shadow2.SetActive(false);
@@ -62,6 +64,9 @@ public class Trigger2Event : MonoBehaviour
             return;
 
         FindPlayer();
+
+        if (extension == null)
+            extension = InnExtensionBuilder.EnsureBuilt();
 
         // 浴槽の子供を確認した後、室内Trigger接触なしで事件後シーケンスを開始する。
         if (!started && progress.storyStep == GameProgress.SecondEventReady)
@@ -114,20 +119,25 @@ public class Trigger2Event : MonoBehaviour
         progress.AdvanceTo(GameProgress.CrowdGathering);
 
         int count = Mathf.Max(20, crowdCount);
-        Vector3 entrance = GetEntrancePosition();
+        float travelSeconds = Mathf.Max(2f, arrivalMoveSeconds * 1.6f);
 
         for (int i = 0; i < count; i++)
         {
-            GameObject actor = CreateCrowdMember(i, entrance);
+            Vector3 target = GetCrowdPosition(i, count);
+            Vector3 spawn = GetArrivalSpawnPosition(target.y, i);
+
+            GameObject actor = CreateCrowdMember(i, spawn);
             crowd.Add(actor);
 
-            Vector3 target = GetCrowdPosition(i, count);
-            StartCoroutine(MoveActor(actor, target, arrivalMoveSeconds, false));
+            Vector3[] path = extension != null
+                ? extension.GetArrivalPath(target)
+                : new[] { target };
 
+            StartCoroutine(MoveActorAlongPath(actor, path, travelSeconds, false));
             yield return new WaitForSeconds(arrivalInterval);
         }
 
-        yield return new WaitForSeconds(arrivalMoveSeconds);
+        yield return new WaitForSeconds(travelSeconds);
 
         progress.AdvanceTo(GameProgress.SceneInvestigation);
         yield return new WaitForSeconds(investigationSeconds);
@@ -137,43 +147,69 @@ public class Trigger2Event : MonoBehaviour
     {
         progress.AdvanceTo(GameProgress.CrowdLeaving);
 
-        Vector3 entrance = GetEntrancePosition();
-        Vector3 outward = entrance - transform.position;
-        outward.y = 0f;
-
-        if (outward.sqrMagnitude < 0.01f)
-            outward = transform.forward;
-        else
-            outward.Normalize();
+        float travelSeconds = Mathf.Max(2f, departureMoveSeconds * 1.5f);
 
         for (int i = 0; i < crowd.Count; i++)
         {
             GameObject actor = crowd[i];
             if (actor != null)
             {
-                Vector3 outside = entrance + outward * (2.5f + (i % 3) * 0.7f);
-                StartCoroutine(MoveActor(actor, outside, departureMoveSeconds, true));
+                Vector3[] path;
+
+                if (extension != null)
+                {
+                    path = extension.GetDeparturePath(actor.transform.position, i);
+                }
+                else
+                {
+                    Vector3 entrance = GetEntrancePosition();
+                    Vector3 outward = entrance - transform.position;
+                    outward.y = 0f;
+                    outward = outward.sqrMagnitude < 0.01f
+                        ? transform.forward
+                        : outward.normalized;
+
+                    path = new[]
+                    {
+                        entrance,
+                        entrance + outward * (2.5f + (i % 3) * 0.7f)
+                    };
+                }
+
+                StartCoroutine(MoveActorAlongPath(actor, path, travelSeconds, true));
             }
 
-            // 一斉消滅ではなく、1人ずつ玄関へ向かわせる。
+            // 一斉消滅ではなく、1人ずつ廊下・玄関を通って退出させる。
             yield return new WaitForSeconds(departureInterval);
         }
 
-        yield return new WaitForSeconds(departureMoveSeconds + 0.25f);
+        yield return new WaitForSeconds(travelSeconds + 0.25f);
         crowd.Clear();
     }
 
-    GameObject CreateCrowdMember(int index, Vector3 entrance)
+    Vector3 GetArrivalSpawnPosition(float y, int index)
+    {
+        if (extension != null)
+        {
+            Vector3 spawn = extension.OutsidePoint + extension.Outward * 2.5f;
+            spawn += extension.Side * (((index % 3) - 1) * 0.6f);
+            spawn.y = y;
+            return spawn;
+        }
+
+        Vector3 fallback = GetEntrancePosition();
+        fallback.y = y;
+        return fallback;
+    }
+
+    GameObject CreateCrowdMember(int index, Vector3 spawnPosition)
     {
         GameObject actor = GameObject.CreatePrimitive(PrimitiveType.Capsule);
         actor.name = index < 6
             ? $"Police_{index + 1:00}"
             : $"Onlooker_{index - 5:00}";
 
-        actor.transform.position = entrance + new Vector3(
-            ((index % 4) - 1.5f) * 0.35f,
-            1f,
-            -((index % 3) * 0.2f));
+        actor.transform.position = spawnPosition;
         actor.transform.localScale = new Vector3(0.55f, 0.9f, 0.55f);
 
         Collider actorCollider = actor.GetComponent<Collider>();
@@ -196,7 +232,30 @@ public class Trigger2Event : MonoBehaviour
         return transform.position + offset;
     }
 
-    IEnumerator MoveActor(GameObject actor, Vector3 destination, float seconds, bool destroyAtEnd)
+    IEnumerator MoveActorAlongPath(
+        GameObject actor,
+        Vector3[] path,
+        float totalSeconds,
+        bool destroyAtEnd)
+    {
+        if (actor == null || path == null || path.Length == 0)
+            yield break;
+
+        float secondsPerSegment = Mathf.Max(0.05f, totalSeconds / path.Length);
+
+        for (int i = 0; i < path.Length; i++)
+        {
+            if (actor == null)
+                yield break;
+
+            yield return StartCoroutine(MoveActorSegment(actor, path[i], secondsPerSegment));
+        }
+
+        if (actor != null && destroyAtEnd)
+            Destroy(actor);
+    }
+
+    IEnumerator MoveActorSegment(GameObject actor, Vector3 destination, float seconds)
     {
         if (actor == null)
             yield break;
@@ -219,17 +278,15 @@ public class Trigger2Event : MonoBehaviour
             yield return null;
         }
 
-        if (actor == null)
-            yield break;
-
-        actor.transform.position = destination;
-
-        if (destroyAtEnd)
-            Destroy(actor);
+        if (actor != null)
+            actor.transform.position = destination;
     }
 
     Vector3 GetEntrancePosition()
     {
+        if (extension != null)
+            return extension.EntrancePoint;
+
         if (exitPoint != null)
             return exitPoint.position;
 
@@ -245,6 +302,11 @@ public class Trigger2Event : MonoBehaviour
         {
             position = graveSpawnPoint.position;
             rotation = graveSpawnPoint.rotation;
+        }
+        else if (extension != null)
+        {
+            position = extension.GravePoint;
+            rotation = Quaternion.LookRotation(-extension.Outward, Vector3.up);
         }
         else
         {
@@ -335,7 +397,7 @@ public class Trigger2Event : MonoBehaviour
 
             string text = IsNearGrave()
                 ? "E：墓碑を調べる"
-                : "外に、見覚えのない墓碑がある。";
+                : "玄関の外に、見覚えのない墓碑がある。";
 
             float width = Mathf.Min(700f, Screen.width - 30f);
             GUI.Box(new Rect((Screen.width - width) / 2f, 20f, width, 70f), text, guide);
