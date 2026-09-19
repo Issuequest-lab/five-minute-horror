@@ -41,12 +41,13 @@ public class LightOffTrigger : MonoBehaviour
         if (!nearPlayer || hasTriggered)
             return;
 
-        if (progress == null || progress.storyStep > 1 ||
-    !progress.hasInspectedRoom ||
-    progress.roomInspectedFrame == Time.frameCount)
-    return;
+        if (progress == null ||
+            progress.storyStep > GameProgress.FirstEvent ||
+            !progress.hasInspectedRoom ||
+            progress.roomInspectedFrame == Time.frameCount)
+            return;
 
-        if (Keyboard.current != null &
+        if (Keyboard.current != null &&
             Keyboard.current.eKey.wasPressedThisFrame)
         {
             BeginEvent();
@@ -62,7 +63,7 @@ public class LightOffTrigger : MonoBehaviour
         }
 
         hasTriggered = true;
-        progress.storyStep = 1;
+        progress.AdvanceTo(GameProgress.FirstEvent);
 
         roomLight.enabled = false;
 
@@ -79,50 +80,41 @@ public class LightOffTrigger : MonoBehaviour
         shadow.SetActive(false);
         roomLight.enabled = true;
 
-        progress.storyStep = 2;
+        progress.AdvanceTo(GameProgress.SecondEventReady);
         trigger2.SetActive(true);
     }
 
     void OnGUI()
-{
-    if (hasTriggered ||
-        progress == null ||
-        progress.storyStep > 1 ||
-        !progress.hasInspectedRoom ||
-        progress.roomInspectedFrame == Time.frameCount)
-        return;
-
-    GUIStyle style = new GUIStyle(GUI.skin.box);
-    style.fontSize = 26;
-    style.fontStyle = FontStyle.Bold;
-    style.alignment = TextAnchor.MiddleCenter;
-    style.wordWrap = true;
-    style.normal.textColor = Color.white;
-
-    float width = Mathf.Min(700f, Screen.width - 30f);
-
-    Rect guideRect = new Rect(
-        (Screen.width - width) / 2f,
-        20f,
-        width,
-        70f
-    );
-
-    if (nearPlayer)
     {
+        if (hasTriggered ||
+            progress == null ||
+            progress.storyStep > GameProgress.FirstEvent ||
+            !progress.hasInspectedRoom ||
+            progress.roomInspectedFrame == Time.frameCount)
+            return;
+
+        GUIStyle style = new GUIStyle(GUI.skin.box);
+        style.fontSize = 26;
+        style.fontStyle = FontStyle.Bold;
+        style.alignment = TextAnchor.MiddleCenter;
+        style.wordWrap = true;
+        style.normal.textColor = Color.white;
+
+        float width = Mathf.Min(700f, Screen.width - 30f);
+
+        Rect guideRect = new Rect(
+            (Screen.width - width) / 2f,
+            20f,
+            width,
+            70f
+        );
+
         GUI.Box(
             guideRect,
-            "E：電気を消して休む",
+            nearPlayer
+                ? "E：電気を消して休む"
+                : "目的：電気を消して休もう",
             style
         );
     }
-    else
-    {
-        GUI.Box(
-            guideRect,
-            "目的：電気を消して休もう",
-            style
-        );
-    }
-}
 }
