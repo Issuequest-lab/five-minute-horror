@@ -54,14 +54,12 @@ public class HorrorGuide : MonoBehaviour
                 return "浴槽のある部屋を確認しよう。";
 
             case GameProgress.FirstEvent:
-                return "浴槽で子供を目撃した。今夜は落ち着いて休もう。";
+                return "浴槽で子供を発見した。警察へ連絡している。";
 
             case GameProgress.SecondEventReady:
-                return "部屋の空気が変わった。何かが起きようとしている。";
+                return "警察と野次馬が現場へ向かっている。";
 
             case GameProgress.SecondEvent:
-                return "室内で怪異が起きている。";
-
             case GameProgress.CrowdGathering:
                 return "警察官と野次馬が現場へ集まってきている。";
 
