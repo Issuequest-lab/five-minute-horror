@@ -24,6 +24,31 @@ public class LightOffTrigger : MonoBehaviour
             shadow.SetActive(false);
     }
 
+    public void BeginIncidentAfterBath()
+    {
+        if (progress == null)
+            progress = FindAnyObjectByType<GameProgress>();
+
+        if (progress == null || trigger2 == null)
+        {
+            Debug.LogError("事件後シーケンスの参照が不足しています。");
+            return;
+        }
+
+        // 新仕様では浴槽の子供を確認した直後に事件後シーケンスへ入る。
+        // 旧仕様の「電気を消す」操作はここでは要求しない。
+        hasTriggered = true;
+
+        if (shadow != null)
+            shadow.SetActive(false);
+
+        if (roomLight != null)
+            roomLight.enabled = true;
+
+        progress.AdvanceTo(GameProgress.SecondEventReady);
+        trigger2.SetActive(true);
+    }
+
     void OnTriggerEnter(Collider other)
     {
         if (other.CompareTag("Player"))
@@ -47,14 +72,15 @@ public class LightOffTrigger : MonoBehaviour
             progress.roomInspectedFrame == Time.frameCount)
             return;
 
+        // 旧シーンを壊さないためのフォールバック。
         if (Keyboard.current != null &&
             Keyboard.current.eKey.wasPressedThisFrame)
         {
-            BeginEvent();
+            BeginLegacyLightEvent();
         }
     }
 
-    void BeginEvent()
+    void BeginLegacyLightEvent()
     {
         if (roomLight == null || shadow == null || trigger2 == null)
         {
@@ -71,7 +97,6 @@ public class LightOffTrigger : MonoBehaviour
             scarySound.Play();
 
         shadow.SetActive(true);
-
         Invoke(nameof(HideShadow), shadowSeconds);
     }
 
@@ -112,8 +137,8 @@ public class LightOffTrigger : MonoBehaviour
         GUI.Box(
             guideRect,
             nearPlayer
-                ? "E：電気を消して休む"
-                : "目的：電気を消して休もう",
+                ? "E：電気を消す"
+                : "目的：部屋の状況を確認しよう",
             style
         );
     }
