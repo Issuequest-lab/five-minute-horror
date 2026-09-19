@@ -5,9 +5,8 @@ using UnityEngine.InputSystem;
 
 public class Trigger2Event : MonoBehaviour
 {
-    [Header("怪異2")]
+    [Header("旧怪異オブジェクト（初期非表示維持用）")]
     public GameObject shadow2;
-    public float shadowSeconds = 5f;
 
     [Header("旅館の出口")]
     public Transform exitPoint;
@@ -64,11 +63,11 @@ public class Trigger2Event : MonoBehaviour
 
         FindPlayer();
 
-        // LightOffTriggerで怪異1が終了したら、室内Trigger接触なしで自動進行する。
+        // 浴槽の子供を確認した後、室内Trigger接触なしで事件後シーケンスを開始する。
         if (!started && progress.storyStep == GameProgress.SecondEventReady)
         {
             started = true;
-            StartCoroutine(SecondEventAndAftermath());
+            StartCoroutine(IncidentAftermathSequence());
         }
 
         if (!graveReady || ending || player == null)
@@ -94,16 +93,9 @@ public class Trigger2Event : MonoBehaviour
             player = p.transform;
     }
 
-    IEnumerator SecondEventAndAftermath()
+    IEnumerator IncidentAftermathSequence()
     {
         progress.AdvanceTo(GameProgress.SecondEvent);
-
-        if (shadow2 != null)
-        {
-            shadow2.SetActive(true);
-            yield return new WaitForSeconds(shadowSeconds);
-            shadow2.SetActive(false);
-        }
 
         yield return StartCoroutine(CrowdArrivalSequence());
         yield return StartCoroutine(CrowdDepartureSequence());
@@ -265,7 +257,6 @@ public class Trigger2Event : MonoBehaviour
             else
                 outward.Normalize();
 
-            // 既存の出口位置からさらに外側へ生成する。
             position = entrance + outward * graveOutsideDistance;
             rotation = Quaternion.LookRotation(-outward, Vector3.up);
         }
