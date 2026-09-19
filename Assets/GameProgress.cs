@@ -5,16 +5,30 @@ public class GameProgress : MonoBehaviour
     public const int Start = 0;
     public const int FirstEvent = 1;
     public const int SecondEventReady = 2;
-    public const int SecondEvent = 3;
-    public const int CrowdGathering = 4;
-    public const int SceneInvestigation = 5;
-    public const int CrowdLeaving = 6;
-    public const int InnQuiet = 7;
+
+    // 事件後はリアルタイムNPCではなく、サウンドノベル風の場面転換で時間経過を見せる。
+    public const int PoliceArrival = 3;
+    public const int PoliceQuestioning = 4;
+    public const int InvestigationComplete = 5;
+    public const int DaysLater = 6;
+    public const int GuestBStart = 7;
     public const int GraveCreated = 8;
     public const int GraveInspected = 9;
     public const int Cleared = 10;
 
+    // 旧スクリプト互換用エイリアス。
+    public const int SecondEvent = PoliceArrival;
+    public const int CrowdGathering = PoliceQuestioning;
+    public const int SceneInvestigation = InvestigationComplete;
+    public const int CrowdLeaving = DaysLater;
+    public const int InnQuiet = GuestBStart;
+
+    public const int GuestA = 0;
+    public const int GuestB = 1;
+
     public int storyStep = Start;
+    public int currentGuest = GuestA;
+    public bool isStoryInterlude = false;
     public bool hasInspectedRoom = false;
 
     [HideInInspector]
