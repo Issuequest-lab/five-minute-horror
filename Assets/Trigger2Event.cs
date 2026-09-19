@@ -8,22 +8,11 @@ public class Trigger2Event : MonoBehaviour
     [Header("旧怪異オブジェクト（初期非表示維持用）")]
     public GameObject shadow2;
 
-    [Header("旅館の出口（旧設定・未設定でも可）")]
-    public Transform exitPoint;
-    public float exitDistance = 2f;
-
-    [Header("事件後の群衆")]
-    [Min(20)] public int crowdCount = 24;
-    public float arrivalInterval = 0.25f;
-    public float arrivalMoveSeconds = 2.5f;
-    public float investigationSeconds = 8f;
-    public float departureInterval = 0.65f;
-    public float departureMoveSeconds = 3f;
+    [Header("サウンドノベル風の事件後演出")]
+    public float panelInputDelay = 0.8f;
 
     [Header("墓碑")]
-    public Transform graveSpawnPoint;
-    public float graveDelaySeconds = 5f;
-    public float graveOutsideDistance = 4f;
+    public float graveInteractDistance = 2.2f;
 
     [Header("終了演出")]
     public float inscriptionSeconds = 4f;
@@ -31,21 +20,30 @@ public class Trigger2Event : MonoBehaviour
 
     GameProgress progress;
     Transform player;
-    InnExtensionBuilder extension;
-    readonly List<GameObject> crowd = new List<GameObject>();
+    Rigidbody playerBody;
+    RigidbodyConstraints savedConstraints;
+    readonly List<MonoBehaviour> disabledPlayerBehaviours = new List<MonoBehaviour>();
 
     bool started;
+    bool interludeActive;
+    int storyPanel;
+    float panelShownAt;
+
+    bool guestBActive;
     bool graveReady;
     bool ending;
     bool cleared;
     string eventMessage = "";
     float fadeAlpha;
+
+    GameObject aftermathRoot;
     GameObject graveRoot;
+    Vector3 guestBSpawn;
+    Quaternion guestBRotation;
 
     void Awake()
     {
         progress = FindAnyObjectByType<GameProgress>();
-        extension = InnExtensionBuilder.EnsureBuilt();
 
         if (shadow2 != null)
             shadow2.SetActive(false);
@@ -65,17 +63,20 @@ public class Trigger2Event : MonoBehaviour
 
         FindPlayer();
 
-        if (extension == null)
-            extension = InnExtensionBuilder.EnsureBuilt();
-
-        // 浴槽の子供を確認した後、室内Trigger接触なしで事件後シーケンスを開始する。
-        if (!started && progress.storyStep == GameProgress.SecondEventReady)
+        // 浴槽の遺体を確認した直後から、操作を止めて事件の時間経過を見せる。
+        if (!started && progress.storyStep >= GameProgress.SecondEventReady)
         {
             started = true;
-            StartCoroutine(IncidentAftermathSequence());
+            BeginStoryInterlude();
         }
 
-        if (!graveReady || ending || player == null)
+        if (interludeActive)
+        {
+            HandleInterludeInput();
+            return;
+        }
+
+        if (!guestBActive || !graveReady || ending || player == null)
             return;
 
         if (Keyboard.current != null &&
@@ -94,243 +95,233 @@ public class Trigger2Event : MonoBehaviour
             return;
 
         GameObject p = GameObject.FindGameObjectWithTag("Player");
-        if (p != null)
-            player = p.transform;
+        if (p == null)
+            return;
+
+        player = p.transform;
+        playerBody = p.GetComponent<Rigidbody>();
     }
 
-    IEnumerator IncidentAftermathSequence()
+    void BeginStoryInterlude()
     {
-        progress.AdvanceTo(GameProgress.SecondEvent);
+        interludeActive = true;
+        storyPanel = 0;
+        panelShownAt = Time.unscaledTime;
 
-        yield return StartCoroutine(CrowdArrivalSequence());
-        yield return StartCoroutine(CrowdDepartureSequence());
+        progress.isStoryInterlude = true;
+        progress.AdvanceTo(GameProgress.PoliceArrival);
 
-        progress.AdvanceTo(GameProgress.InnQuiet);
+        FreezePlayerControls();
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
 
-        yield return new WaitForSeconds(graveDelaySeconds);
+    void HandleInterludeInput()
+    {
+        if (Time.unscaledTime - panelShownAt < panelInputDelay)
+            return;
 
-        CreateGrave();
+        if (Keyboard.current == null)
+            return;
+
+        bool nextPressed =
+            Keyboard.current.eKey.wasPressedThisFrame ||
+            Keyboard.current.spaceKey.wasPressedThisFrame ||
+            Keyboard.current.enterKey.wasPressedThisFrame;
+
+        if (!nextPressed)
+            return;
+
+        storyPanel++;
+        panelShownAt = Time.unscaledTime;
+
+        switch (storyPanel)
+        {
+            case 1:
+                progress.AdvanceTo(GameProgress.PoliceQuestioning);
+                break;
+
+            case 2:
+                progress.AdvanceTo(GameProgress.InvestigationComplete);
+                break;
+
+            case 3:
+                progress.AdvanceTo(GameProgress.DaysLater);
+                break;
+
+            case 4:
+                progress.AdvanceTo(GameProgress.GuestBStart);
+                break;
+
+            default:
+                CompleteStoryInterlude();
+                break;
+        }
+    }
+
+    void CompleteStoryInterlude()
+    {
+        BuildAftermathExterior();
+
+        progress.currentGuest = GameProgress.GuestB;
+        progress.isStoryInterlude = false;
         progress.AdvanceTo(GameProgress.GraveCreated);
+
+        SwitchToGuestB();
+
+        interludeActive = false;
+        guestBActive = true;
         graveReady = true;
     }
 
-    IEnumerator CrowdArrivalSequence()
+    void FreezePlayerControls()
     {
-        progress.AdvanceTo(GameProgress.CrowdGathering);
+        if (player == null)
+            return;
 
-        int count = Mathf.Max(20, crowdCount);
-        float travelSeconds = Mathf.Max(2f, arrivalMoveSeconds * 1.6f);
+        disabledPlayerBehaviours.Clear();
 
-        for (int i = 0; i < count; i++)
+        MonoBehaviour[] behaviours = player.GetComponentsInChildren<MonoBehaviour>(true);
+        foreach (MonoBehaviour behaviour in behaviours)
         {
-            Vector3 target = GetCrowdPosition(i, count);
-            Vector3 spawn = GetArrivalSpawnPosition(target.y, i);
-
-            GameObject actor = CreateCrowdMember(i, spawn);
-            crowd.Add(actor);
-
-            Vector3[] path = extension != null
-                ? extension.GetArrivalPath(target)
-                : new[] { target };
-
-            StartCoroutine(MoveActorAlongPath(actor, path, travelSeconds, false));
-            yield return new WaitForSeconds(arrivalInterval);
-        }
-
-        yield return new WaitForSeconds(travelSeconds);
-
-        progress.AdvanceTo(GameProgress.SceneInvestigation);
-        yield return new WaitForSeconds(investigationSeconds);
-    }
-
-    IEnumerator CrowdDepartureSequence()
-    {
-        progress.AdvanceTo(GameProgress.CrowdLeaving);
-
-        float travelSeconds = Mathf.Max(2f, departureMoveSeconds * 1.5f);
-
-        for (int i = 0; i < crowd.Count; i++)
-        {
-            GameObject actor = crowd[i];
-            if (actor != null)
+            if (behaviour != null && behaviour.enabled)
             {
-                Vector3[] path;
-
-                if (extension != null)
-                {
-                    path = extension.GetDeparturePath(actor.transform.position, i);
-                }
-                else
-                {
-                    Vector3 entrance = GetEntrancePosition();
-                    Vector3 outward = entrance - transform.position;
-                    outward.y = 0f;
-                    outward = outward.sqrMagnitude < 0.01f
-                        ? transform.forward
-                        : outward.normalized;
-
-                    path = new[]
-                    {
-                        entrance,
-                        entrance + outward * (2.5f + (i % 3) * 0.7f)
-                    };
-                }
-
-                StartCoroutine(MoveActorAlongPath(actor, path, travelSeconds, true));
+                behaviour.enabled = false;
+                disabledPlayerBehaviours.Add(behaviour);
             }
-
-            // 一斉消滅ではなく、1人ずつ廊下・玄関を通って退出させる。
-            yield return new WaitForSeconds(departureInterval);
         }
 
-        yield return new WaitForSeconds(travelSeconds + 0.25f);
-        crowd.Clear();
-    }
-
-    Vector3 GetArrivalSpawnPosition(float y, int index)
-    {
-        if (extension != null)
+        if (playerBody != null)
         {
-            Vector3 spawn = extension.OutsidePoint + extension.Outward * 2.5f;
-            spawn += extension.Side * (((index % 3) - 1) * 0.6f);
-            spawn.y = y;
-            return spawn;
+            savedConstraints = playerBody.constraints;
+            playerBody.constraints = RigidbodyConstraints.FreezeAll;
         }
-
-        Vector3 fallback = GetEntrancePosition();
-        fallback.y = y;
-        return fallback;
     }
 
-    GameObject CreateCrowdMember(int index, Vector3 spawnPosition)
+    void RestorePlayerControls()
     {
-        GameObject actor = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-        actor.name = index < 6
-            ? $"Police_{index + 1:00}"
-            : $"Onlooker_{index - 5:00}";
+        if (playerBody != null)
+            playerBody.constraints = savedConstraints;
 
-        actor.transform.position = spawnPosition;
-        actor.transform.localScale = new Vector3(0.55f, 0.9f, 0.55f);
-
-        Collider actorCollider = actor.GetComponent<Collider>();
-        if (actorCollider != null)
-            actorCollider.enabled = false;
-
-        return actor;
-    }
-
-    Vector3 GetCrowdPosition(int index, int count)
-    {
-        float angle = (360f / count) * index * Mathf.Deg2Rad;
-        float radius = 2.6f + (index % 4) * 0.65f;
-
-        Vector3 offset = new Vector3(
-            Mathf.Cos(angle) * radius,
-            1f,
-            Mathf.Sin(angle) * radius);
-
-        return transform.position + offset;
-    }
-
-    IEnumerator MoveActorAlongPath(
-        GameObject actor,
-        Vector3[] path,
-        float totalSeconds,
-        bool destroyAtEnd)
-    {
-        if (actor == null || path == null || path.Length == 0)
-            yield break;
-
-        float secondsPerSegment = Mathf.Max(0.05f, totalSeconds / path.Length);
-
-        for (int i = 0; i < path.Length; i++)
+        foreach (MonoBehaviour behaviour in disabledPlayerBehaviours)
         {
-            if (actor == null)
-                yield break;
-
-            yield return StartCoroutine(MoveActorSegment(actor, path[i], secondsPerSegment));
+            if (behaviour != null)
+                behaviour.enabled = true;
         }
 
-        if (actor != null && destroyAtEnd)
-            Destroy(actor);
+        disabledPlayerBehaviours.Clear();
     }
 
-    IEnumerator MoveActorSegment(GameObject actor, Vector3 destination, float seconds)
+    void SwitchToGuestB()
     {
-        if (actor == null)
-            yield break;
+        if (player == null)
+            return;
 
-        Vector3 start = actor.transform.position;
-        float duration = Mathf.Max(0.05f, seconds);
-        float elapsed = 0f;
+        player.SetPositionAndRotation(guestBSpawn, guestBRotation);
 
-        while (elapsed < duration && actor != null)
-        {
-            float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
-            actor.transform.position = Vector3.Lerp(start, destination, t);
+        Camera playerCamera = player.GetComponentInChildren<Camera>(true);
+        if (playerCamera != null)
+            playerCamera.transform.localRotation = Quaternion.identity;
 
-            Vector3 direction = destination - actor.transform.position;
-            direction.y = 0f;
-            if (direction.sqrMagnitude > 0.001f)
-                actor.transform.forward = direction.normalized;
+        Physics.SyncTransforms();
+        RestorePlayerControls();
 
-            elapsed += Time.deltaTime;
-            yield return null;
-        }
-
-        if (actor != null)
-            actor.transform.position = destination;
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
-    Vector3 GetEntrancePosition()
+    void BuildAftermathExterior()
     {
-        if (extension != null)
-            return extension.EntrancePoint;
+        if (aftermathRoot != null)
+            return;
 
-        if (exitPoint != null)
-            return exitPoint.position;
+        float floorY = 0f;
+        GameObject originalFloor = GameObject.Find("Plane");
+        if (originalFloor != null)
+            floorY = originalFloor.transform.position.y;
 
-        return transform.position + transform.forward * 10f;
+        Vector3 anchor = new Vector3(40f, floorY, 0f);
+
+        aftermathRoot = new GameObject("Aftermath_Exterior");
+
+        // 小さな旅館前だけを用意する。事件中の警察NPCや灰色の廊下は生成しない。
+        CreateBlock("Exterior_Ground", anchor + new Vector3(0f, -0.1f, 0f),
+            new Vector3(18f, 0.2f, 14f), new Color(0.18f, 0.18f, 0.17f));
+
+        CreateBlock("Inn_Left", anchor + new Vector3(-3.3f, 1.6f, 5f),
+            new Vector3(3.4f, 3.2f, 0.45f), new Color(0.18f, 0.12f, 0.09f));
+        CreateBlock("Inn_Right", anchor + new Vector3(3.3f, 1.6f, 5f),
+            new Vector3(3.4f, 3.2f, 0.45f), new Color(0.18f, 0.12f, 0.09f));
+        CreateBlock("Inn_EntranceTop", anchor + new Vector3(0f, 2.75f, 5f),
+            new Vector3(3.2f, 0.9f, 0.45f), new Color(0.14f, 0.09f, 0.07f));
+        CreateBlock("Inn_Roof", anchor + new Vector3(0f, 3.45f, 5f),
+            new Vector3(10.8f, 0.35f, 1.6f), new Color(0.08f, 0.08f, 0.08f));
+        CreateBlock("Inn_Door", anchor + new Vector3(0f, 1.1f, 4.78f),
+            new Vector3(2.4f, 2.2f, 0.12f), new Color(0.09f, 0.08f, 0.07f));
+
+        CreateLantern(anchor + new Vector3(-1.7f, 1.7f, 4.5f));
+        CreateLantern(anchor + new Vector3(1.7f, 1.7f, 4.5f));
+
+        CreateBlock("Fence_Left", anchor + new Vector3(-8f, 0.55f, 0f),
+            new Vector3(0.25f, 1.1f, 14f), new Color(0.11f, 0.1f, 0.09f));
+        CreateBlock("Fence_Right", anchor + new Vector3(8f, 0.55f, 0f),
+            new Vector3(0.25f, 1.1f, 14f), new Color(0.11f, 0.1f, 0.09f));
+
+        guestBSpawn = anchor + new Vector3(0f, 1.05f, -4.5f);
+        guestBRotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+
+        CreateGrave(anchor + new Vector3(2.7f, 0f, 0.7f));
     }
 
-    void CreateGrave()
+    void CreateLantern(Vector3 position)
     {
-        Vector3 position;
-        Quaternion rotation = Quaternion.identity;
+        GameObject lantern = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+        lantern.name = "Entrance_Lantern";
+        lantern.transform.SetParent(aftermathRoot.transform, true);
+        lantern.transform.position = position;
+        lantern.transform.localScale = new Vector3(0.42f, 0.55f, 0.42f);
 
-        if (graveSpawnPoint != null)
-        {
-            position = graveSpawnPoint.position;
-            rotation = graveSpawnPoint.rotation;
-        }
-        else if (extension != null)
-        {
-            position = extension.GravePoint;
-            rotation = Quaternion.LookRotation(-extension.Outward, Vector3.up);
-        }
-        else
-        {
-            Vector3 entrance = GetEntrancePosition();
-            Vector3 outward = entrance - transform.position;
-            outward.y = 0f;
+        Renderer renderer = lantern.GetComponent<Renderer>();
+        if (renderer != null)
+            renderer.material.color = new Color(0.75f, 0.58f, 0.34f);
 
-            if (outward.sqrMagnitude < 0.01f)
-                outward = transform.forward;
-            else
-                outward.Normalize();
+        Collider collider = lantern.GetComponent<Collider>();
+        if (collider != null)
+            collider.enabled = false;
+    }
 
-            position = entrance + outward * graveOutsideDistance;
-            rotation = Quaternion.LookRotation(-outward, Vector3.up);
-        }
+    GameObject CreateBlock(string objectName, Vector3 position, Vector3 scale, Color color)
+    {
+        GameObject block = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        block.name = objectName;
+        block.transform.SetParent(aftermathRoot.transform, true);
+        block.transform.position = position;
+        block.transform.localScale = scale;
 
+        Renderer renderer = block.GetComponent<Renderer>();
+        if (renderer != null)
+            renderer.material.color = color;
+
+        return block;
+    }
+
+    void CreateGrave(Vector3 position)
+    {
         graveRoot = new GameObject("Grave_待叶想");
-        graveRoot.transform.SetPositionAndRotation(position, rotation);
+        graveRoot.transform.SetParent(aftermathRoot.transform, true);
+        graveRoot.transform.position = position;
+        graveRoot.transform.rotation = Quaternion.LookRotation(Vector3.back, Vector3.up);
 
-        CreateGravePart("Base", new Vector3(0f, 0.15f, 0f), new Vector3(1.4f, 0.3f, 0.9f));
-        CreateGravePart("Stone", new Vector3(0f, 1.05f, 0f), new Vector3(0.9f, 1.6f, 0.35f));
+        GameObject basePart = CreateGravePart("Base",
+            new Vector3(0f, 0.15f, 0f), new Vector3(1.4f, 0.3f, 0.9f));
+        GameObject stonePart = CreateGravePart("Stone",
+            new Vector3(0f, 1.05f, 0f), new Vector3(0.9f, 1.6f, 0.35f));
+
+        SetPartColor(basePart, new Color(0.18f, 0.18f, 0.2f));
+        SetPartColor(stonePart, new Color(0.22f, 0.22f, 0.24f));
     }
 
-    void CreateGravePart(string partName, Vector3 localPosition, Vector3 localScale)
+    GameObject CreateGravePart(string partName, Vector3 localPosition, Vector3 localScale)
     {
         GameObject part = GameObject.CreatePrimitive(PrimitiveType.Cube);
         part.name = partName;
@@ -341,6 +332,15 @@ public class Trigger2Event : MonoBehaviour
         Collider partCollider = part.GetComponent<Collider>();
         if (partCollider != null)
             partCollider.enabled = false;
+
+        return part;
+    }
+
+    void SetPartColor(GameObject part, Color color)
+    {
+        Renderer renderer = part != null ? part.GetComponent<Renderer>() : null;
+        if (renderer != null)
+            renderer.material.color = color;
     }
 
     bool IsNearGrave()
@@ -351,12 +351,16 @@ public class Trigger2Event : MonoBehaviour
         Vector3 difference = player.position - graveRoot.transform.position;
         difference.y = 0f;
 
-        return difference.sqrMagnitude <= exitDistance * exitDistance;
+        return difference.sqrMagnitude <= graveInteractDistance * graveInteractDistance;
     }
 
     IEnumerator GraveEndingSequence()
     {
         ending = true;
+        FreezePlayerControls();
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+
         eventMessage = "墓碑には『待叶想』と刻まれている。";
         yield return new WaitForSeconds(inscriptionSeconds);
 
@@ -386,7 +390,13 @@ public class Trigger2Event : MonoBehaviour
 
     void OnGUI()
     {
-        if (graveReady && graveRoot != null)
+        if (interludeActive)
+        {
+            DrawStoryInterlude();
+            return;
+        }
+
+        if (guestBActive && graveReady && graveRoot != null)
         {
             GUIStyle guide = new GUIStyle(GUI.skin.box);
             guide.alignment = TextAnchor.MiddleCenter;
@@ -397,7 +407,7 @@ public class Trigger2Event : MonoBehaviour
 
             string text = IsNearGrave()
                 ? "E：墓碑を調べる"
-                : "玄関の外に、見覚えのない墓碑がある。";
+                : "数日後 ― 宿泊客B。旅館の周囲を確認しよう。";
 
             float width = Mathf.Min(700f, Screen.width - 30f);
             GUI.Box(new Rect((Screen.width - width) / 2f, 20f, width, 70f), text, guide);
@@ -405,6 +415,8 @@ public class Trigger2Event : MonoBehaviour
 
         if (ending && eventMessage != "")
         {
+            DrawRect(new Rect(0, 0, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.82f));
+
             GUIStyle eventStyle = new GUIStyle(GUI.skin.box);
             eventStyle.alignment = TextAnchor.MiddleCenter;
             eventStyle.fontSize = 26;
@@ -419,10 +431,8 @@ public class Trigger2Event : MonoBehaviour
 
         if (fadeAlpha > 0f || cleared)
         {
-            Color previousColor = GUI.color;
-            GUI.color = new Color(0f, 0f, 0f, cleared ? 1f : fadeAlpha);
-            GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
-            GUI.color = previousColor;
+            DrawRect(new Rect(0, 0, Screen.width, Screen.height),
+                new Color(0f, 0f, 0f, cleared ? 1f : fadeAlpha));
         }
 
         if (!cleared)
@@ -455,6 +465,172 @@ public class Trigger2Event : MonoBehaviour
         {
             QuitGame();
         }
+    }
+
+    void DrawStoryInterlude()
+    {
+        DrawRect(new Rect(0, 0, Screen.width, Screen.height), Color.black);
+
+        float artWidth = Mathf.Min(900f, Screen.width * 0.82f);
+        float artHeight = Screen.height * 0.55f;
+        Rect art = new Rect((Screen.width - artWidth) * 0.5f, Screen.height * 0.08f, artWidth, artHeight);
+
+        DrawRect(art, new Color(0.055f, 0.055f, 0.065f));
+        DrawPanelArtwork(art);
+
+        GUIStyle title = new GUIStyle(GUI.skin.label);
+        title.alignment = TextAnchor.MiddleCenter;
+        title.fontSize = 25;
+        title.fontStyle = FontStyle.Bold;
+        title.normal.textColor = Color.white;
+
+        GUI.Label(new Rect(0, art.y - 5f, Screen.width, 42f), GetPanelTitle(), title);
+
+        GUIStyle caption = new GUIStyle(GUI.skin.box);
+        caption.alignment = TextAnchor.MiddleCenter;
+        caption.fontSize = 24;
+        caption.wordWrap = true;
+        caption.normal.textColor = Color.white;
+
+        Rect captionRect = new Rect(
+            Screen.width * 0.10f,
+            Screen.height * 0.68f,
+            Screen.width * 0.80f,
+            Screen.height * 0.17f);
+
+        GUI.Box(captionRect, GetPanelCaption(), caption);
+
+        GUIStyle next = new GUIStyle(GUI.skin.label);
+        next.alignment = TextAnchor.MiddleCenter;
+        next.fontSize = 17;
+        next.normal.textColor = new Color(0.78f, 0.78f, 0.78f);
+
+        string nextText = Time.unscaledTime - panelShownAt >= panelInputDelay
+            ? "E / Space / Enter：次へ"
+            : "";
+
+        GUI.Label(new Rect(0, Screen.height * 0.87f, Screen.width, 35f), nextText, next);
+    }
+
+    void DrawPanelArtwork(Rect art)
+    {
+        switch (storyPanel)
+        {
+            case 0:
+                DrawInnSilhouette(art);
+                DrawRect(new Rect(art.x + art.width * 0.12f, art.y + art.height * 0.74f,
+                    art.width * 0.12f, art.height * 0.045f), new Color(0.15f, 0.35f, 0.8f));
+                DrawRect(new Rect(art.x + art.width * 0.24f, art.y + art.height * 0.74f,
+                    art.width * 0.12f, art.height * 0.045f), new Color(0.75f, 0.12f, 0.12f));
+
+                for (int i = 0; i < 8; i++)
+                    DrawPerson(art, 0.10f + i * 0.105f, 0.70f, 0.055f, 0.22f);
+                break;
+
+            case 1:
+                DrawRect(new Rect(art.x + art.width * 0.18f, art.y + art.height * 0.58f,
+                    art.width * 0.64f, art.height * 0.10f), new Color(0.22f, 0.19f, 0.16f));
+                DrawPerson(art, 0.30f, 0.54f, 0.09f, 0.30f);
+                DrawPerson(art, 0.62f, 0.54f, 0.09f, 0.30f);
+                break;
+
+            case 2:
+                DrawInnSilhouette(art);
+                GUIStyle clock = new GUIStyle(GUI.skin.label);
+                clock.alignment = TextAnchor.MiddleCenter;
+                clock.fontSize = 38;
+                clock.fontStyle = FontStyle.Bold;
+                clock.normal.textColor = new Color(0.7f, 0.7f, 0.72f);
+                GUI.Label(new Rect(art.x, art.y + art.height * 0.18f, art.width, 60f), "03:40", clock);
+                break;
+
+            case 3:
+                GUIStyle days = new GUIStyle(GUI.skin.label);
+                days.alignment = TextAnchor.MiddleCenter;
+                days.fontSize = 52;
+                days.fontStyle = FontStyle.Bold;
+                days.normal.textColor = Color.white;
+                GUI.Label(art, "―― 数日後 ――", days);
+                break;
+
+            default:
+                DrawInnSilhouette(art);
+                DrawPerson(art, 0.43f, 0.72f, 0.10f, 0.34f);
+                DrawRect(new Rect(art.x + art.width * 0.70f, art.y + art.height * 0.62f,
+                    art.width * 0.08f, art.height * 0.24f), new Color(0.28f, 0.28f, 0.3f));
+                DrawRect(new Rect(art.x + art.width * 0.675f, art.y + art.height * 0.82f,
+                    art.width * 0.13f, art.height * 0.05f), new Color(0.22f, 0.22f, 0.24f));
+                break;
+        }
+    }
+
+    void DrawInnSilhouette(Rect art)
+    {
+        DrawRect(new Rect(art.x + art.width * 0.16f, art.y + art.height * 0.25f,
+            art.width * 0.68f, art.height * 0.45f), new Color(0.14f, 0.12f, 0.12f));
+        DrawRect(new Rect(art.x + art.width * 0.10f, art.y + art.height * 0.20f,
+            art.width * 0.80f, art.height * 0.10f), new Color(0.08f, 0.08f, 0.09f));
+        DrawRect(new Rect(art.x + art.width * 0.43f, art.y + art.height * 0.46f,
+            art.width * 0.14f, art.height * 0.24f), new Color(0.035f, 0.035f, 0.04f));
+    }
+
+    void DrawPerson(Rect art, float x, float bottom, float width, float height)
+    {
+        Rect body = new Rect(
+            art.x + art.width * x,
+            art.y + art.height * (bottom - height),
+            art.width * width,
+            art.height * height);
+
+        DrawRect(body, new Color(0.055f, 0.055f, 0.06f));
+
+        float headSize = art.width * width * 0.72f;
+        DrawRect(new Rect(
+            body.x + body.width * 0.14f,
+            body.y - headSize * 0.82f,
+            headSize,
+            headSize), new Color(0.07f, 0.07f, 0.075f));
+    }
+
+    string GetPanelTitle()
+    {
+        switch (storyPanel)
+        {
+            case 0: return "事件当日";
+            case 1: return "事情聴取";
+            case 2: return "現場検証終了";
+            case 3: return "時間経過";
+            default: return "別の宿泊客";
+        }
+    }
+
+    string GetPanelCaption()
+    {
+        switch (storyPanel)
+        {
+            case 0:
+                return "通報から間もなく、警察と救急が到着した。\n旅館の周囲には野次馬まで集まり、現場は騒然となった。";
+
+            case 1:
+                return "遺体を発見した宿泊客Aを含め、\nその場にいた宿泊客たちは一人ずつ事情を聞かれた。";
+
+            case 2:
+                return "現場検証が終わったのは夜明け前だった。\n人々は旅館を離れ、事件当日の時間はここで途切れる。";
+
+            case 3:
+                return "事件から数日が経った。\n旅館の外には、あの日には無かった墓碑が建てられていた。";
+
+            default:
+                return "事件を知らない別の宿泊客Bが、この旅館を訪れた。\nここから操作する人物は、遺体を発見した宿泊客Aとは別人である。";
+        }
+    }
+
+    void DrawRect(Rect rect, Color color)
+    {
+        Color previous = GUI.color;
+        GUI.color = color;
+        GUI.DrawTexture(rect, Texture2D.whiteTexture);
+        GUI.color = previous;
     }
 
     void QuitGame()
