@@ -1,26 +1,46 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public class Trigger2Event : MonoBehaviour
 {
+    [Header("怪異2")]
     public GameObject shadow2;
     public float shadowSeconds = 5f;
 
+    [Header("旅館の出口")]
     public Transform exitPoint;
     public float exitDistance = 2f;
 
-    public float doorOpenSeconds = 1f;
+    [Header("事件後の群衆")]
+    [Min(20)] public int crowdCount = 24;
+    public float arrivalInterval = 0.25f;
+    public float arrivalMoveSeconds = 2.5f;
+    public float investigationSeconds = 8f;
+    public float departureInterval = 0.65f;
+    public float departureMoveSeconds = 3f;
+
+    [Header("墓碑")]
+    public Transform graveSpawnPoint;
+    public float graveDelaySeconds = 5f;
+    public float graveOutsideDistance = 4f;
+
+    [Header("終了演出")]
+    public float inscriptionSeconds = 4f;
     public float fadeSeconds = 1f;
 
     GameProgress progress;
     Transform player;
+    readonly List<GameObject> crowd = new List<GameObject>();
 
     bool started;
-    bool unlocked;
-    bool exiting;
+    bool graveReady;
+    bool ending;
     bool cleared;
+    string eventMessage = "";
     float fadeAlpha;
+    GameObject graveRoot;
 
     void Awake()
     {
@@ -28,178 +48,329 @@ public class Trigger2Event : MonoBehaviour
 
         if (shadow2 != null)
             shadow2.SetActive(false);
-    }
 
-    void OnTriggerEnter(Collider other)
-    {
-        if (!other.CompareTag("Player") || started)
-            return;
+        // 旧仕様の「室内Triggerを踏むと進行」を無効化する。
+        Collider indoorTrigger = GetComponent<Collider>();
+        if (indoorTrigger != null)
+            indoorTrigger.enabled = false;
 
-        if (progress == null || progress.storyStep != 2)
-            return;
-
-        if (shadow2 == null)
-        {
-            Debug.LogError("怪異2のShadow_2が未設定です。");
-            return;
-        }
-
-        player = other.attachedRigidbody != null
-            ? other.attachedRigidbody.transform
-            : other.transform;
-
-        started = true;
-        progress.storyStep = 3;
-
-        StartCoroutine(SecondEvent());
-    }
-
-    IEnumerator SecondEvent()
-    {
-        shadow2.SetActive(true);
-
-        yield return new WaitForSeconds(shadowSeconds);
-
-        shadow2.SetActive(false);
-
-        progress.storyStep = 4;
-        unlocked = true;
+        FindPlayer();
     }
 
     void Update()
     {
-        if (!unlocked || exiting || cleared || player == null)
+        if (progress == null)
+            return;
+
+        FindPlayer();
+
+        // LightOffTriggerで怪異1が終了したら、室内Trigger接触なしで自動進行する。
+        if (!started && progress.storyStep == GameProgress.SecondEventReady)
+        {
+            started = true;
+            StartCoroutine(SecondEventAndAftermath());
+        }
+
+        if (!graveReady || ending || player == null)
             return;
 
         if (Keyboard.current != null &&
             Keyboard.current.eKey.wasPressedThisFrame &&
-            IsNearExit())
+            IsNearGrave())
         {
-            StartCoroutine(ExitSequence());
+            graveReady = false;
+            progress.AdvanceTo(GameProgress.GraveInspected);
+            StartCoroutine(GraveEndingSequence());
         }
     }
 
-    bool IsNearExit()
+    void FindPlayer()
     {
-        Transform point = exitPoint != null ? exitPoint : transform;
+        if (player != null)
+            return;
 
-        Vector3 difference = player.position - point.position;
+        GameObject p = GameObject.FindGameObjectWithTag("Player");
+        if (p != null)
+            player = p.transform;
+    }
+
+    IEnumerator SecondEventAndAftermath()
+    {
+        progress.AdvanceTo(GameProgress.SecondEvent);
+
+        if (shadow2 != null)
+        {
+            shadow2.SetActive(true);
+            yield return new WaitForSeconds(shadowSeconds);
+            shadow2.SetActive(false);
+        }
+
+        yield return StartCoroutine(CrowdArrivalSequence());
+        yield return StartCoroutine(CrowdDepartureSequence());
+
+        progress.AdvanceTo(GameProgress.InnQuiet);
+
+        yield return new WaitForSeconds(graveDelaySeconds);
+
+        CreateGrave();
+        progress.AdvanceTo(GameProgress.GraveCreated);
+        graveReady = true;
+    }
+
+    IEnumerator CrowdArrivalSequence()
+    {
+        progress.AdvanceTo(GameProgress.CrowdGathering);
+
+        int count = Mathf.Max(20, crowdCount);
+        Vector3 entrance = GetEntrancePosition();
+
+        for (int i = 0; i < count; i++)
+        {
+            GameObject actor = CreateCrowdMember(i, entrance);
+            crowd.Add(actor);
+
+            Vector3 target = GetCrowdPosition(i, count);
+            StartCoroutine(MoveActor(actor, target, arrivalMoveSeconds, false));
+
+            yield return new WaitForSeconds(arrivalInterval);
+        }
+
+        yield return new WaitForSeconds(arrivalMoveSeconds);
+
+        progress.AdvanceTo(GameProgress.SceneInvestigation);
+        yield return new WaitForSeconds(investigationSeconds);
+    }
+
+    IEnumerator CrowdDepartureSequence()
+    {
+        progress.AdvanceTo(GameProgress.CrowdLeaving);
+
+        Vector3 entrance = GetEntrancePosition();
+        Vector3 outward = entrance - transform.position;
+        outward.y = 0f;
+
+        if (outward.sqrMagnitude < 0.01f)
+            outward = transform.forward;
+        else
+            outward.Normalize();
+
+        for (int i = 0; i < crowd.Count; i++)
+        {
+            GameObject actor = crowd[i];
+            if (actor != null)
+            {
+                Vector3 outside = entrance + outward * (2.5f + (i % 3) * 0.7f);
+                StartCoroutine(MoveActor(actor, outside, departureMoveSeconds, true));
+            }
+
+            // 一斉消滅ではなく、1人ずつ玄関へ向かわせる。
+            yield return new WaitForSeconds(departureInterval);
+        }
+
+        yield return new WaitForSeconds(departureMoveSeconds + 0.25f);
+        crowd.Clear();
+    }
+
+    GameObject CreateCrowdMember(int index, Vector3 entrance)
+    {
+        GameObject actor = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+        actor.name = index < 6
+            ? $"Police_{index + 1:00}"
+            : $"Onlooker_{index - 5:00}";
+
+        actor.transform.position = entrance + new Vector3(
+            ((index % 4) - 1.5f) * 0.35f,
+            1f,
+            -((index % 3) * 0.2f));
+        actor.transform.localScale = new Vector3(0.55f, 0.9f, 0.55f);
+
+        Collider actorCollider = actor.GetComponent<Collider>();
+        if (actorCollider != null)
+            actorCollider.enabled = false;
+
+        return actor;
+    }
+
+    Vector3 GetCrowdPosition(int index, int count)
+    {
+        float angle = (360f / count) * index * Mathf.Deg2Rad;
+        float radius = 2.6f + (index % 4) * 0.65f;
+
+        Vector3 offset = new Vector3(
+            Mathf.Cos(angle) * radius,
+            1f,
+            Mathf.Sin(angle) * radius);
+
+        return transform.position + offset;
+    }
+
+    IEnumerator MoveActor(GameObject actor, Vector3 destination, float seconds, bool destroyAtEnd)
+    {
+        if (actor == null)
+            yield break;
+
+        Vector3 start = actor.transform.position;
+        float duration = Mathf.Max(0.05f, seconds);
+        float elapsed = 0f;
+
+        while (elapsed < duration && actor != null)
+        {
+            float t = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
+            actor.transform.position = Vector3.Lerp(start, destination, t);
+
+            Vector3 direction = destination - actor.transform.position;
+            direction.y = 0f;
+            if (direction.sqrMagnitude > 0.001f)
+                actor.transform.forward = direction.normalized;
+
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        if (actor == null)
+            yield break;
+
+        actor.transform.position = destination;
+
+        if (destroyAtEnd)
+            Destroy(actor);
+    }
+
+    Vector3 GetEntrancePosition()
+    {
+        if (exitPoint != null)
+            return exitPoint.position;
+
+        return transform.position + transform.forward * 10f;
+    }
+
+    void CreateGrave()
+    {
+        Vector3 position;
+        Quaternion rotation = Quaternion.identity;
+
+        if (graveSpawnPoint != null)
+        {
+            position = graveSpawnPoint.position;
+            rotation = graveSpawnPoint.rotation;
+        }
+        else
+        {
+            Vector3 entrance = GetEntrancePosition();
+            Vector3 outward = entrance - transform.position;
+            outward.y = 0f;
+
+            if (outward.sqrMagnitude < 0.01f)
+                outward = transform.forward;
+            else
+                outward.Normalize();
+
+            // 既存の出口位置からさらに外側へ生成する。
+            position = entrance + outward * graveOutsideDistance;
+            rotation = Quaternion.LookRotation(-outward, Vector3.up);
+        }
+
+        graveRoot = new GameObject("Grave_待叶想");
+        graveRoot.transform.SetPositionAndRotation(position, rotation);
+
+        CreateGravePart("Base", new Vector3(0f, 0.15f, 0f), new Vector3(1.4f, 0.3f, 0.9f));
+        CreateGravePart("Stone", new Vector3(0f, 1.05f, 0f), new Vector3(0.9f, 1.6f, 0.35f));
+    }
+
+    void CreateGravePart(string partName, Vector3 localPosition, Vector3 localScale)
+    {
+        GameObject part = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        part.name = partName;
+        part.transform.SetParent(graveRoot.transform, false);
+        part.transform.localPosition = localPosition;
+        part.transform.localScale = localScale;
+
+        Collider partCollider = part.GetComponent<Collider>();
+        if (partCollider != null)
+            partCollider.enabled = false;
+    }
+
+    bool IsNearGrave()
+    {
+        if (graveRoot == null || player == null)
+            return false;
+
+        Vector3 difference = player.position - graveRoot.transform.position;
         difference.y = 0f;
 
         return difference.sqrMagnitude <= exitDistance * exitDistance;
     }
 
-    IEnumerator ExitSequence()
+    IEnumerator GraveEndingSequence()
     {
-        exiting = true;
+        ending = true;
+        eventMessage = "墓碑には『待叶想』と刻まれている。";
+        yield return new WaitForSeconds(inscriptionSeconds);
 
-        // 脱出演出中はPlayerを動かさない
-        PlayerMove movement = player.GetComponent<PlayerMove>();
-        if (movement != null)
-            movement.enabled = false;
+        eventMessage = "待つ。叶う。ソウ。";
+        yield return new WaitForSeconds(inscriptionSeconds);
 
-        Rigidbody body = player.GetComponent<Rigidbody>();
-        if (body != null)
+        eventMessage = "……真っ赤な嘘。";
+        yield return new WaitForSeconds(inscriptionSeconds);
+
+        eventMessage = "";
+
+        float duration = Mathf.Max(0.05f, fadeSeconds);
+        float elapsed = 0f;
+
+        while (elapsed < duration)
         {
-            body.linearVelocity = Vector3.zero;
-            body.angularVelocity = Vector3.zero;
-            body.constraints = RigidbodyConstraints.FreezeAll;
-        }
-
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
-
-        // Exit Pointに設定したDoorを開く
-        if (exitPoint != null)
-        {
-            Transform door = exitPoint;
-
-            // Cubeの左端を蝶番として回転させる
-            Vector3 hinge = door.TransformPoint(
-                new Vector3(-0.5f, 0f, 0f));
-
-            Vector3 startPosition = door.position;
-            Quaternion startRotation = door.rotation;
-
-            // 開く途中でPlayerと物理的にぶつからないようにする
-            Collider doorCollider = door.GetComponent<Collider>();
-            if (doorCollider != null)
-                doorCollider.enabled = false;
-
-            float elapsed = 0f;
-            float duration = Mathf.Max(0.01f, doorOpenSeconds);
-
-            while (elapsed < duration)
-            {
-                float t = Mathf.SmoothStep(
-                    0f, 1f, Mathf.Clamp01(elapsed / duration));
-
-                Quaternion turn = Quaternion.AngleAxis(
-                    90f * t, Vector3.up);
-
-                door.SetPositionAndRotation(
-                    hinge + turn * (startPosition - hinge),
-                    turn * startRotation);
-
-                elapsed += Time.deltaTime;
-                yield return null;
-            }
-
-            Quaternion finalTurn =
-                Quaternion.AngleAxis(90f, Vector3.up);
-
-            door.SetPositionAndRotation(
-                hinge + finalTurn * (startPosition - hinge),
-                finalTurn * startRotation);
-        }
-
-        // 扉が開いたあと、画面を暗転
-        float fadeElapsed = 0f;
-        float fadeDuration = Mathf.Max(0.01f, fadeSeconds);
-
-        while (fadeElapsed < fadeDuration)
-        {
-            fadeAlpha = Mathf.Clamp01(
-                fadeElapsed / fadeDuration);
-
-            fadeElapsed += Time.deltaTime;
+            fadeAlpha = Mathf.Clamp01(elapsed / duration);
+            elapsed += Time.deltaTime;
             yield return null;
         }
 
         fadeAlpha = 1f;
-
-        progress.storyStep = 5;
+        progress.AdvanceTo(GameProgress.Cleared);
         cleared = true;
-        exiting = false;
-
         Time.timeScale = 0f;
     }
 
     void OnGUI()
     {
-        if (!unlocked && !exiting && !cleared)
-            return;
-
-        if (!exiting && !cleared)
+        if (graveReady && graveRoot != null)
         {
-            GUI.Box(
-                new Rect(10, 10, Screen.width - 20, 45),
-                IsNearExit()
-                    ? "出口が開いた　Eキーで脱出"
-                    : "出口が開いた");
-            return;
+            GUIStyle guide = new GUIStyle(GUI.skin.box);
+            guide.alignment = TextAnchor.MiddleCenter;
+            guide.fontSize = 24;
+            guide.fontStyle = FontStyle.Bold;
+            guide.wordWrap = true;
+            guide.normal.textColor = Color.white;
+
+            string text = IsNearGrave()
+                ? "E：墓碑を調べる"
+                : "外に、見覚えのない墓碑がある。";
+
+            float width = Mathf.Min(700f, Screen.width - 30f);
+            GUI.Box(new Rect((Screen.width - width) / 2f, 20f, width, 70f), text, guide);
         }
 
-        // 暗転
-        Color previousColor = GUI.color;
-        GUI.color = new Color(0f, 0f, 0f,
-            cleared ? 1f : fadeAlpha);
+        if (ending && eventMessage != "")
+        {
+            GUIStyle eventStyle = new GUIStyle(GUI.skin.box);
+            eventStyle.alignment = TextAnchor.MiddleCenter;
+            eventStyle.fontSize = 26;
+            eventStyle.wordWrap = true;
+            eventStyle.normal.textColor = Color.white;
 
-        GUI.DrawTexture(
-            new Rect(0, 0, Screen.width, Screen.height),
-            Texture2D.whiteTexture);
+            GUI.Box(
+                new Rect(Screen.width * 0.15f, Screen.height * 0.42f, Screen.width * 0.7f, 90f),
+                eventMessage,
+                eventStyle);
+        }
 
-        GUI.color = previousColor;
+        if (fadeAlpha > 0f || cleared)
+        {
+            Color previousColor = GUI.color;
+            GUI.color = new Color(0f, 0f, 0f, cleared ? 1f : fadeAlpha);
+            GUI.DrawTexture(new Rect(0, 0, Screen.width, Screen.height), Texture2D.whiteTexture);
+            GUI.color = previousColor;
+        }
 
         if (!cleared)
             return;
@@ -211,8 +382,9 @@ public class Trigger2Event : MonoBehaviour
         title.normal.textColor = Color.white;
 
         GUI.Label(
-            new Rect(0, Screen.height * 0.35f, Screen.width, 60),
-            "CLEAR", title);
+            new Rect(0, Screen.height * 0.35f, Screen.width, 60f),
+            "CLEAR",
+            title);
 
         GUIStyle message = new GUIStyle(GUI.skin.label);
         message.alignment = TextAnchor.MiddleCenter;
@@ -220,12 +392,12 @@ public class Trigger2Event : MonoBehaviour
         message.normal.textColor = Color.white;
 
         GUI.Label(
-            new Rect(0, Screen.height * 0.45f, Screen.width, 50),
-            "脱出成功", message);
+            new Rect(0, Screen.height * 0.45f, Screen.width, 50f),
+            "事件のあとに残ったものを見届けた。",
+            message);
 
         if (GUI.Button(
-            new Rect(Screen.width / 2f - 90f,
-                     Screen.height * 0.60f, 180f, 45f),
+            new Rect(Screen.width / 2f - 90f, Screen.height * 0.60f, 180f, 45f),
             "ゲームを終了"))
         {
             QuitGame();
