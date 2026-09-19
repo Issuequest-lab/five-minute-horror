@@ -40,28 +40,22 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
             return false;
 
         if (progress.hasInspectedRoom ||
-            progress.storyStep >= 2)
+            progress.storyStep >= GameProgress.SecondEventReady)
             return false;
 
-        Vector3 difference =
-            player.position - inspectTarget.position;
-
+        Vector3 difference = player.position - inspectTarget.position;
         difference.y = 0f;
 
-        return difference.sqrMagnitude <=
-               inspectDistance * inspectDistance;
+        return difference.sqrMagnitude <= inspectDistance * inspectDistance;
     }
 
     void Update()
     {
-        if (!CanInspect() ||
-            Keyboard.current == null)
+        if (!CanInspect() || Keyboard.current == null)
             return;
 
         if (Keyboard.current.eKey.wasPressedThisFrame)
-        {
             StartCoroutine(ApparitionSequence());
-        }
     }
 
     IEnumerator ApparitionSequence()
@@ -71,65 +65,64 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
         if (childCorpse != null)
         {
             childCorpse.SetActive(true);
-
-            yield return new WaitForSeconds(
-                apparitionSeconds);
-
+            yield return new WaitForSeconds(apparitionSeconds);
             childCorpse.SetActive(false);
         }
 
+        progress.AdvanceTo(GameProgress.FirstEvent);
         showingMessage = true;
 
-        yield return new WaitForSeconds(
-            messageSeconds);
+        yield return new WaitForSeconds(messageSeconds);
 
         showingMessage = false;
-
         progress.hasInspectedRoom = true;
         progress.roomInspectedFrame = Time.frameCount;
+
+        // 浴槽の子供を確認した直後に、警察・野次馬の事件後シーケンスへ進める。
+        LightOffTrigger incidentStarter = FindAnyObjectByType<LightOffTrigger>();
+        if (incidentStarter != null)
+            incidentStarter.BeginIncidentAfterBath();
+        else
+            Debug.LogError("事件後シーケンスを開始するLightOffTriggerが見つかりません。");
 
         isInspecting = false;
     }
 
     void OnGUI()
-{
-    GUIStyle style =
-        new GUIStyle(GUI.skin.box);
-
-    style.fontSize = 26;
-    style.fontStyle = FontStyle.Bold;
-    style.alignment = TextAnchor.MiddleCenter;
-    style.wordWrap = true;
-    style.normal.textColor = Color.white;
-
-    float width =
-        Mathf.Min(700f, Screen.width - 30f);
-
-    Rect messageRect = new Rect(
-        (Screen.width - width) / 2f,
-        20f,
-        width,
-        70f
-    );
-
-    if (showingMessage)
     {
-        GUI.Box(
-            messageRect,
-            "……今、何か見えた気がする。\nもう休もう。電気を消そう。",
-            style
+        GUIStyle style = new GUIStyle(GUI.skin.box);
+        style.fontSize = 26;
+        style.fontStyle = FontStyle.Bold;
+        style.alignment = TextAnchor.MiddleCenter;
+        style.wordWrap = true;
+        style.normal.textColor = Color.white;
+
+        float width = Mathf.Min(700f, Screen.width - 30f);
+
+        Rect messageRect = new Rect(
+            (Screen.width - width) / 2f,
+            20f,
+            width,
+            70f
         );
 
-        return;
-    }
+        if (showingMessage)
+        {
+            GUI.Box(
+                messageRect,
+                "浴槽に子供がいる。\n警察を呼ばないと……。",
+                style
+            );
+            return;
+        }
 
-    if (CanInspect())
-    {
-        GUI.Box(
-            messageRect,
-            "E：浴槽を調べる",
-            style
-        );
+        if (CanInspect())
+        {
+            GUI.Box(
+                messageRect,
+                "E：浴槽を調べる",
+                style
+            );
+        }
     }
-}
 }
