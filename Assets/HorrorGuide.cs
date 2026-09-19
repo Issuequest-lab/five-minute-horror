@@ -61,19 +61,19 @@ public class HorrorGuide : MonoBehaviour
 
             case GameProgress.SecondEvent:
             case GameProgress.CrowdGathering:
-                return "警察官と野次馬が現場へ集まってきている。";
+                return "警察官と野次馬が玄関から現場へ集まってきている。";
 
             case GameProgress.SceneInvestigation:
                 return "20人以上が集まり、警察の現場確認が続いている。";
 
             case GameProgress.CrowdLeaving:
-                return "現場確認が終わり、人々が一人ずつ旅館を出ていく。";
+                return "現場確認が終わり、人々が一人ずつ廊下と玄関を通って旅館を出ていく。";
 
             case GameProgress.InnQuiet:
-                return "先ほどまでの騒ぎが嘘のように、旅館は静かになった。";
+                return "先ほどまでの騒ぎが嘘のように静かになった。玄関から外へ出てみよう。";
 
             case GameProgress.GraveCreated:
-                return "時間が経った。旅館の外に、さっきまで無かったものがある。";
+                return "時間が経った。玄関の外に、さっきまで無かった墓碑がある。";
 
             case GameProgress.GraveInspected:
                 return "墓碑に刻まれた文字を確認している。";
