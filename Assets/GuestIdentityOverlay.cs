@@ -55,7 +55,6 @@ public class GuestIdentityOverlay : MonoBehaviour
         if (!monthsLater && !femaleArrival)
             return;
 
-        // 既存の説明パネルより前面に出し、不自然な「別人です」という説明を見せない。
         GUI.depth = -1000;
 
         Color previous = GUI.color;
@@ -75,6 +74,11 @@ public class GuestIdentityOverlay : MonoBehaviour
         body.wordWrap = true;
         body.normal.textColor = Color.white;
 
+        GUIStyle next = new GUIStyle(GUI.skin.label);
+        next.alignment = TextAnchor.MiddleCenter;
+        next.fontSize = 17;
+        next.normal.textColor = new Color(0.78f, 0.78f, 0.78f);
+
         if (monthsLater)
         {
             GUI.Label(
@@ -87,10 +91,12 @@ public class GuestIdentityOverlay : MonoBehaviour
                     Screen.width * 0.68f, 100f),
                 "事件の記憶が薄れ始めた頃。\n旅館は再び客を迎えていた。",
                 body);
+
+            GUI.Label(new Rect(0, Screen.height * 0.88f, Screen.width, 35f),
+                "E / Space / Enter：次へ", next);
             return;
         }
 
-        // 女性客のシルエット。髪を示す輪郭を追加し、文章で「別人」と説明しなくても視覚で分ける。
         float cx = Screen.width * 0.5f;
         float top = Screen.height * 0.23f;
 
@@ -109,6 +115,9 @@ public class GuestIdentityOverlay : MonoBehaviour
                 Screen.width * 0.68f, 90f),
             "彼女は、ここで起きた事件を知らない。",
             body);
+
+        GUI.Label(new Rect(0, Screen.height * 0.88f, Screen.width, 35f),
+            "E / Space / Enter：次へ", next);
     }
 
     void DrawRect(Rect rect, Color color)
