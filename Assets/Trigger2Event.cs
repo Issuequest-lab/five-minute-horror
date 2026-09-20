@@ -28,22 +28,17 @@ public class Trigger2Event : MonoBehaviour
     readonly List<MonoBehaviour> disabledPlayerBehaviours = new List<MonoBehaviour>();
 
     bool started;
-
-    // 事件当日 → 数日後の前半インタールード。
     bool interludeActive;
     int storyPanel;
     float panelShownAt;
 
-    // 宿泊客B。
     bool guestBActive;
     bool graveReady;
 
-    // 墓碑確認後の後半サウンドノベル。
     bool postStoryActive;
     int postStage;
     float postStageShownAt;
 
-    // 「待つ叶う想」連打。
     bool chantMashActive;
     int mashCount;
     float mashTimeRemaining;
@@ -66,7 +61,6 @@ public class Trigger2Event : MonoBehaviour
         if (shadow2 != null)
             shadow2.SetActive(false);
 
-        // 旧仕様の「室内Triggerを踏むと進行」を無効化する。
         Collider indoorTrigger = GetComponent<Collider>();
         if (indoorTrigger != null)
             indoorTrigger.enabled = false;
@@ -81,7 +75,6 @@ public class Trigger2Event : MonoBehaviour
 
         FindPlayer();
 
-        // 浴槽の遺体を確認した直後から事件当日の説明へ。
         if (!started && progress.storyStep >= GameProgress.SecondEventReady)
         {
             started = true;
@@ -90,7 +83,7 @@ public class Trigger2Event : MonoBehaviour
 
         if (interludeActive)
         {
-            HandleInterludeInput();
+            HandleOpeningInterludeInput();
             return;
         }
 
@@ -124,16 +117,16 @@ public class Trigger2Event : MonoBehaviour
         if (player != null)
             return;
 
-        GameObject p = GameObject.FindGameObjectWithTag("Player");
-        if (p == null)
+        GameObject playerObject = GameObject.FindGameObjectWithTag("Player");
+        if (playerObject == null)
             return;
 
-        player = p.transform;
-        playerBody = p.GetComponent<Rigidbody>();
+        player = playerObject.transform;
+        playerBody = playerObject.GetComponent<Rigidbody>();
     }
 
     // ---------------------------------------------------------------------
-    // 前半：事件当日 → 数日後 → 宿泊客B
+    // 前半：事件当日 → 警察 → 事情聴取 → 数日後 → 宿泊客B
     // ---------------------------------------------------------------------
 
     void BeginStoryInterlude()
@@ -146,11 +139,10 @@ public class Trigger2Event : MonoBehaviour
         progress.AdvanceTo(GameProgress.PoliceArrival);
 
         FreezePlayerControls();
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
+        UnlockCursor();
     }
 
-    void HandleInterludeInput()
+    void HandleOpeningInterludeInput()
     {
         if (!NextPressed() || Time.unscaledTime - panelShownAt < panelInputDelay)
             return;
@@ -163,26 +155,22 @@ public class Trigger2Event : MonoBehaviour
             case 1:
                 progress.AdvanceTo(GameProgress.PoliceQuestioning);
                 break;
-
             case 2:
                 progress.AdvanceTo(GameProgress.InvestigationComplete);
                 break;
-
             case 3:
                 progress.AdvanceTo(GameProgress.DaysLater);
                 break;
-
             case 4:
                 progress.AdvanceTo(GameProgress.GuestBStart);
                 break;
-
             default:
-                CompleteStoryInterlude();
+                CompleteOpeningInterlude();
                 break;
         }
     }
 
-    void CompleteStoryInterlude()
+    void CompleteOpeningInterlude()
     {
         BuildAftermathExterior();
 
@@ -209,8 +197,7 @@ public class Trigger2Event : MonoBehaviour
         progress.isStoryInterlude = true;
 
         FreezePlayerControls();
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
+        UnlockCursor();
     }
 
     void HandlePostStoryInput()
@@ -223,36 +210,28 @@ public class Trigger2Event : MonoBehaviour
         switch (postStage)
         {
             case 0:
-                // 墓碑を読んだあと、旅館へ戻って受付へ。
                 postStage = 1;
                 break;
-
             case 1:
-                // 宿泊手続きを実際の一操作として挟む。
                 progress.AdvanceTo(GameProgress.CheckIn);
                 postStage = 2;
                 break;
-
             case 2:
                 progress.AdvanceTo(GameProgress.RumorTold);
                 postStage = 3;
                 break;
-
             case 3:
                 progress.AdvanceTo(GameProgress.Bedtime);
                 postStage = 4;
                 break;
-
             case 4:
                 progress.AdvanceTo(GameProgress.GhostAppears);
                 postStage = 5;
                 break;
-
             case 5:
                 progress.AdvanceTo(GameProgress.DraggedToHell);
                 postStage = 6;
                 break;
-
             default:
                 BeginChantMash();
                 break;
@@ -284,7 +263,6 @@ public class Trigger2Event : MonoBehaviour
 
         if (mashTimeRemaining <= 0f)
         {
-            // 失敗してもゲームオーバーにはせず、恐怖が終わらない演出として再挑戦させる。
             mashCount = 0;
             mashTimeRemaining = Mathf.Max(3f, mashDuration);
             mashFailureFlashUntil = Time.unscaledTime + 0.9f;
@@ -383,13 +361,23 @@ public class Trigger2Event : MonoBehaviour
 
         Physics.SyncTransforms();
         RestorePlayerControls();
+        LockCursor();
+    }
 
+    void UnlockCursor()
+    {
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    void LockCursor()
+    {
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
     }
 
     // ---------------------------------------------------------------------
-    // 数日後の簡易旅館前・墓碑
+    // 数日後の旅館前・墓碑
     // ---------------------------------------------------------------------
 
     void BuildAftermathExterior()
@@ -533,42 +521,10 @@ public class Trigger2Event : MonoBehaviour
         }
 
         if (guestBActive && graveReady && graveRoot != null)
-        {
-            GUIStyle guide = new GUIStyle(GUI.skin.box);
-            guide.alignment = TextAnchor.MiddleCenter;
-            guide.fontSize = 24;
-            guide.fontStyle = FontStyle.Bold;
-            guide.wordWrap = true;
-            guide.normal.textColor = Color.white;
-
-            string text = IsNearGrave()
-                ? "E：墓碑を調べる"
-                : "数日後 ― 宿泊客B。旅館の周囲を確認しよう。";
-
-            float width = Mathf.Min(700f, Screen.width - 30f);
-            GUI.Box(new Rect((Screen.width - width) / 2f, 20f, width, 70f), text, guide);
-        }
+            DrawGraveGuide();
 
         if (ending && eventMessage != "")
-        {
-            Color bg = progress != null && progress.storyStep >= GameProgress.TruthReveal
-                ? new Color(0.24f, 0f, 0f, 0.94f)
-                : new Color(0f, 0f, 0f, 0.90f);
-            DrawRect(new Rect(0, 0, Screen.width, Screen.height), bg);
-
-            GUIStyle eventStyle = new GUIStyle(GUI.skin.box);
-            eventStyle.alignment = TextAnchor.MiddleCenter;
-            eventStyle.fontSize = 30;
-            eventStyle.fontStyle = FontStyle.Bold;
-            eventStyle.wordWrap = true;
-            eventStyle.normal.textColor = Color.white;
-
-            GUI.Box(
-                new Rect(Screen.width * 0.12f, Screen.height * 0.39f,
-                    Screen.width * 0.76f, Screen.height * 0.20f),
-                eventMessage,
-                eventStyle);
-        }
+            DrawEndingMessage();
 
         if (fadeAlpha > 0f || cleared)
         {
@@ -576,17 +532,55 @@ public class Trigger2Event : MonoBehaviour
                 new Color(0f, 0f, 0f, cleared ? 1f : fadeAlpha));
         }
 
-        if (!cleared)
-            return;
+        if (cleared)
+            DrawClearScreen();
+    }
 
+    void DrawGraveGuide()
+    {
+        GUIStyle guide = new GUIStyle(GUI.skin.box);
+        guide.alignment = TextAnchor.MiddleCenter;
+        guide.fontSize = 24;
+        guide.fontStyle = FontStyle.Bold;
+        guide.wordWrap = true;
+        guide.normal.textColor = Color.white;
+
+        string text = IsNearGrave()
+            ? "E：墓碑を調べる"
+            : "数日後 ― 宿泊客B。旅館の周囲を確認しよう。";
+
+        float width = Mathf.Min(700f, Screen.width - 30f);
+        GUI.Box(new Rect((Screen.width - width) / 2f, 20f, width, 70f), text, guide);
+    }
+
+    void DrawEndingMessage()
+    {
+        Color background = progress != null && progress.storyStep >= GameProgress.TruthReveal
+            ? new Color(0.24f, 0f, 0f, 0.94f)
+            : new Color(0f, 0f, 0f, 0.90f);
+
+        DrawRect(new Rect(0, 0, Screen.width, Screen.height), background);
+
+        GUIStyle style = new GUIStyle(GUI.skin.box);
+        style.alignment = TextAnchor.MiddleCenter;
+        style.fontSize = 30;
+        style.fontStyle = FontStyle.Bold;
+        style.wordWrap = true;
+        style.normal.textColor = Color.white;
+
+        GUI.Box(new Rect(Screen.width * 0.12f, Screen.height * 0.39f,
+            Screen.width * 0.76f, Screen.height * 0.20f), eventMessage, style);
+    }
+
+    void DrawClearScreen()
+    {
         GUIStyle title = new GUIStyle(GUI.skin.label);
         title.alignment = TextAnchor.MiddleCenter;
         title.fontSize = 34;
         title.fontStyle = FontStyle.Bold;
         title.normal.textColor = Color.white;
 
-        GUI.Label(new Rect(0, Screen.height * 0.33f, Screen.width, 65f),
-            "CLEAR", title);
+        GUI.Label(new Rect(0, Screen.height * 0.33f, Screen.width, 65f), "CLEAR", title);
 
         GUIStyle message = new GUIStyle(GUI.skin.label);
         message.alignment = TextAnchor.MiddleCenter;
@@ -596,9 +590,8 @@ public class Trigger2Event : MonoBehaviour
         GUI.Label(new Rect(0, Screen.height * 0.44f, Screen.width, 60f),
             "『待つ叶う想』は、救いの言葉ではなかった。", message);
 
-        if (GUI.Button(
-            new Rect(Screen.width / 2f - 90f, Screen.height * 0.60f, 180f, 45f),
-            "ゲームを終了"))
+        if (GUI.Button(new Rect(Screen.width / 2f - 90f,
+            Screen.height * 0.60f, 180f, 45f), "ゲームを終了"))
         {
             QuitGame();
         }
@@ -648,10 +641,11 @@ public class Trigger2Event : MonoBehaviour
         int target = Mathf.Max(3, mashTargetPresses);
         float ratio = Mathf.Clamp01((float)mashCount / target);
 
-        Rect barBg = new Rect(Screen.width * 0.18f, Screen.height * 0.72f,
+        Rect barBackground = new Rect(Screen.width * 0.18f, Screen.height * 0.72f,
             Screen.width * 0.64f, 34f);
-        DrawRect(barBg, new Color(0.12f, 0.12f, 0.12f));
-        DrawRect(new Rect(barBg.x, barBg.y, barBg.width * ratio, barBg.height),
+        DrawRect(barBackground, new Color(0.12f, 0.12f, 0.12f));
+        DrawRect(new Rect(barBackground.x, barBackground.y,
+            barBackground.width * ratio, barBackground.height),
             new Color(0.72f, 0.08f, 0.08f));
 
         int third = Mathf.Max(1, Mathf.CeilToInt(target / 3f));
@@ -660,13 +654,13 @@ public class Trigger2Event : MonoBehaviour
         for (int i = 0; i < chants; i++)
             chantText += (i == 0 ? "" : "\n") + "待つ叶う想";
 
-        GUIStyle chant = new GUIStyle(GUI.skin.label);
-        chant.alignment = TextAnchor.MiddleCenter;
-        chant.fontSize = 31;
-        chant.fontStyle = FontStyle.Bold;
-        chant.normal.textColor = Color.white;
+        GUIStyle chantStyle = new GUIStyle(GUI.skin.label);
+        chantStyle.alignment = TextAnchor.MiddleCenter;
+        chantStyle.fontSize = 31;
+        chantStyle.fontStyle = FontStyle.Bold;
+        chantStyle.normal.textColor = Color.white;
         GUI.Label(new Rect(Screen.width * 0.12f, Screen.height * 0.47f,
-            Screen.width * 0.76f, Screen.height * 0.20f), chantText, chant);
+            Screen.width * 0.76f, Screen.height * 0.20f), chantText, chantStyle);
 
         GUIStyle prompt = new GUIStyle(GUI.skin.box);
         prompt.alignment = TextAnchor.MiddleCenter;
@@ -725,7 +719,7 @@ public class Trigger2Event : MonoBehaviour
     }
 
     // ---------------------------------------------------------------------
-    // 絵（簡易シルエット）
+    // 簡易シルエット絵
     // ---------------------------------------------------------------------
 
     void DrawOpeningArtwork(Rect art)
@@ -743,10 +737,9 @@ public class Trigger2Event : MonoBehaviour
                 break;
 
             case 1:
-                DrawRect(new Rect(art.x + art.width * 0.18f, art.y + art.height * 0.58f,
-                    art.width * 0.64f, art.height * 0.10f), new Color(0.22f, 0.19f, 0.16f));
-                DrawPerson(art, 0.30f, 0.54f, 0.09f, 0.30f);
-                DrawPerson(art, 0.62f, 0.54f, 0.09f, 0.30f);
+                DrawReception(art);
+                DrawPerson(art, 0.30f, 0.72f, 0.09f, 0.30f);
+                DrawPerson(art, 0.62f, 0.72f, 0.09f, 0.30f);
                 break;
 
             case 2:
@@ -761,8 +754,6 @@ public class Trigger2Event : MonoBehaviour
             default:
                 DrawInnSilhouette(art);
                 DrawPerson(art, 0.43f, 0.72f, 0.10f, 0.34f);
-                DrawRect(new Rect(art.x + art.width * 0.70f, art.y + art.height * 0.62f,
-                    art.width * 0.08f, art.height * 0.24f), new Color(0.28f, 0.28f, 0.3f));
                 break;
         }
     }
@@ -824,28 +815,27 @@ public class Trigger2Event : MonoBehaviour
             art.width * 0.18f, art.height * 0.10f), new Color(0.42f, 0.40f, 0.40f));
     }
 
-    void DrawGhostAtBedside(Rect art, threatening)
+    void DrawGhostAtBedside(Rect art, bool threatening)
     {
         Color bodyColor = threatening
-            ? new Color(0.03f, 0.0f, 0.0f)
+            ? new Color(0.03f, 0f, 0f)
             : new Color(0.04f, 0.04f, 0.045f);
 
         DrawRect(new Rect(art.x + art.width * 0.72f, art.y + art.height * 0.34f,
             art.width * 0.10f, art.height * 0.42f), bodyColor);
 
-        // 顔には目・鼻・口を描かない。「のっぺらぼう」を明示する。
         DrawRect(new Rect(art.x + art.width * 0.715f, art.y + art.height * 0.20f,
             art.width * 0.11f, art.height * 0.16f), new Color(0.78f, 0.76f, 0.72f));
     }
 
     void DrawHellHands(Rect art)
     {
-        Color hand = new Color(0.22f, 0.01f, 0.01f);
+        Color handColor = new Color(0.22f, 0.01f, 0.01f);
         for (int i = 0; i < 5; i++)
         {
             float x = 0.18f + i * 0.15f;
             DrawRect(new Rect(art.x + art.width * x, art.y + art.height * 0.76f,
-                art.width * 0.055f, art.height * 0.22f), hand);
+                art.width * 0.055f, art.height * 0.22f), handColor);
         }
     }
 
@@ -868,6 +858,7 @@ public class Trigger2Event : MonoBehaviour
             art.height * height);
 
         DrawRect(body, new Color(0.055f, 0.055f, 0.06f));
+
         float headSize = art.width * width * 0.72f;
         DrawRect(new Rect(body.x + body.width * 0.14f,
             body.y - headSize * 0.82f, headSize, headSize),
@@ -937,22 +928,16 @@ public class Trigger2Event : MonoBehaviour
         {
             case 0:
                 return "墓碑には『待叶想』と刻まれている。\n読み方も意味も分からない。宿の者なら何か知っているかもしれない。";
-
             case 1:
                 return "宿泊客Bは旅館へ戻り、受付に宿泊を申し出た。\n名前を書き、部屋の鍵を受け取る。";
-
             case 2:
                 return "墓碑のことを尋ねると、受付の人間は一瞬だけ黙った。\nそして、この宿に昔から残る噂を話し始めた。";
-
             case 3:
                 return "『待叶想』――“待つ・叶う・想”。\n夜、枕元に顔のない子供が立ったら、その言葉を三度唱えれば連れていかれずに済む。\n……この宿では、そう言い伝えられている。";
-
             case 4:
                 return "その夜。\n噂を聞いた宿泊客Bは、用意された部屋で眠りについた。";
-
             case 5:
                 return "夜中、気配で目が覚めた。\n枕元には――顔のない子供が立っていた。";
-
             default:
                 return "身体が動かない。布団の下が底のない闇へ沈んでいく。\n子供の手が、宿泊客Bを地獄へ引きずり込もうとしている。\n噂の言葉を唱えるしかない――！";
         }
@@ -974,21 +959,23 @@ public class Trigger2Event : MonoBehaviour
 
     bool MashPressed()
     {
-        bool keyboard = Keyboard.current != null &&
+        bool keyboardPressed = Keyboard.current != null &&
             (Keyboard.current.eKey.wasPressedThisFrame ||
              Keyboard.current.spaceKey.wasPressedThisFrame ||
              Keyboard.current.enterKey.wasPressedThisFrame);
 
-        bool mouse = Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
-        return keyboard || mouse;
+        bool mousePressed = Mouse.current != null &&
+            Mouse.current.leftButton.wasPressedThisFrame;
+
+        return keyboardPressed || mousePressed;
     }
 
     void DrawRect(Rect rect, Color color)
     {
-        Color previous = GUI.color;
+        Color previousColor = GUI.color;
         GUI.color = color;
         GUI.DrawTexture(rect, Texture2D.whiteTexture);
-        GUI.color = previous;
+        GUI.color = previousColor;
     }
 
     void QuitGame()
