@@ -10,7 +10,6 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
     public float messageSeconds = 2.5f;
 
     public GameObject childCorpse;
-    public float apparitionSeconds = 0.7f;
 
     Transform player;
 
@@ -23,12 +22,13 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
             progress = FindAnyObjectByType<GameProgress>();
 
         GameObject p = GameObject.FindGameObjectWithTag("Player");
-
         if (p != null)
             player = p.transform;
 
+        // 少年は「調べた瞬間に出現する怪異」ではなく、
+        // プレイヤーが部屋へ入った時点ですでに浴槽に浮かんでいる。
         if (childCorpse != null)
-            childCorpse.SetActive(false);
+            childCorpse.SetActive(true);
     }
 
     bool CanInspect()
@@ -55,19 +55,12 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
             return;
 
         if (Keyboard.current.eKey.wasPressedThisFrame)
-            StartCoroutine(ApparitionSequence());
+            StartCoroutine(InspectionSequence());
     }
 
-    IEnumerator ApparitionSequence()
+    IEnumerator InspectionSequence()
     {
         isInspecting = true;
-
-        if (childCorpse != null)
-        {
-            childCorpse.SetActive(true);
-            yield return new WaitForSeconds(apparitionSeconds);
-            childCorpse.SetActive(false);
-        }
 
         progress.AdvanceTo(GameProgress.FirstEvent);
         showingMessage = true;
@@ -78,7 +71,6 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
         progress.hasInspectedRoom = true;
         progress.roomInspectedFrame = Time.frameCount;
 
-        // 浴槽の子供を確認した直後に、警察・野次馬の事件後シーケンスへ進める。
         LightOffTrigger incidentStarter = FindAnyObjectByType<LightOffTrigger>();
         if (incidentStarter != null)
             incidentStarter.BeginIncidentAfterBath();
@@ -98,31 +90,22 @@ public class NewMonoBehaviourScript1 : MonoBehaviour
         style.normal.textColor = Color.white;
 
         float width = Mathf.Min(700f, Screen.width - 30f);
-
         Rect messageRect = new Rect(
             (Screen.width - width) / 2f,
             20f,
             width,
-            70f
-        );
+            70f);
 
         if (showingMessage)
         {
             GUI.Box(
                 messageRect,
-                "浴槽に子供がいる。\n警察を呼ばないと……。",
-                style
-            );
+                "浴槽に少年が浮かんでいる。\n……警察を呼ばないと。",
+                style);
             return;
         }
 
         if (CanInspect())
-        {
-            GUI.Box(
-                messageRect,
-                "E：浴槽を調べる",
-                style
-            );
-        }
+            GUI.Box(messageRect, "E：調べる", style);
     }
 }
