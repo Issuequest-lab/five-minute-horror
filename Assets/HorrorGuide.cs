@@ -17,6 +17,7 @@ public class HorrorGuide : MonoBehaviour
 
     void OnGUI()
     {
+        // サウンドノベル、噂、就寝、霊、連打中は専用UIだけを表示する。
         if (progress == null || progress.isStoryInterlude)
             return;
 
@@ -48,7 +49,7 @@ public class HorrorGuide : MonoBehaviour
             progress.storyStep >= GameProgress.GraveCreated &&
             progress.storyStep < GameProgress.GraveInspected)
         {
-            return "数日後／宿泊客B：旅館に到着した。周囲を確認しよう。";
+            return "数日後／宿泊客B：事件を知らず旅館を訪れた。周囲を確認しよう。";
         }
 
         switch (progress.storyStep)
@@ -65,9 +66,6 @@ public class HorrorGuide : MonoBehaviour
 
             case GameProgress.SecondEventReady:
                 return "通報後の状況へ移る。";
-
-            case GameProgress.GraveInspected:
-                return "宿泊客B：墓碑に刻まれた文字を確認している。";
 
             default:
                 return "";
