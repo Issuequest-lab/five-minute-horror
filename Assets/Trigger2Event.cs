@@ -8,14 +8,17 @@ public class Trigger2Event : MonoBehaviour
     [Header("旧怪異オブジェクト（初期非表示維持用）")]
     public GameObject shadow2;
 
-    [Header("サウンドノベル風の事件後演出")]
+    [Header("サウンドノベル風演出")]
     public float panelInputDelay = 0.8f;
 
     [Header("墓碑")]
     public float graveInteractDistance = 2.2f;
 
+    [Header("連打イベント")]
+    public int mashTargetPresses = 30;
+    public float mashDuration = 8.5f;
+
     [Header("終了演出")]
-    public float inscriptionSeconds = 4f;
     public float fadeSeconds = 1f;
 
     GameProgress progress;
@@ -25,12 +28,27 @@ public class Trigger2Event : MonoBehaviour
     readonly List<MonoBehaviour> disabledPlayerBehaviours = new List<MonoBehaviour>();
 
     bool started;
+
+    // 事件当日 → 数日後の前半インタールード。
     bool interludeActive;
     int storyPanel;
     float panelShownAt;
 
+    // 宿泊客B。
     bool guestBActive;
     bool graveReady;
+
+    // 墓碑確認後の後半サウンドノベル。
+    bool postStoryActive;
+    int postStage;
+    float postStageShownAt;
+
+    // 「待つ叶う想」連打。
+    bool chantMashActive;
+    int mashCount;
+    float mashTimeRemaining;
+    float mashFailureFlashUntil;
+
     bool ending;
     bool cleared;
     string eventMessage = "";
@@ -63,7 +81,7 @@ public class Trigger2Event : MonoBehaviour
 
         FindPlayer();
 
-        // 浴槽の遺体を確認した直後から、操作を止めて事件の時間経過を見せる。
+        // 浴槽の遺体を確認した直後から事件当日の説明へ。
         if (!started && progress.storyStep >= GameProgress.SecondEventReady)
         {
             started = true;
@@ -76,6 +94,18 @@ public class Trigger2Event : MonoBehaviour
             return;
         }
 
+        if (postStoryActive)
+        {
+            HandlePostStoryInput();
+            return;
+        }
+
+        if (chantMashActive)
+        {
+            HandleChantMash();
+            return;
+        }
+
         if (!guestBActive || !graveReady || ending || player == null)
             return;
 
@@ -85,7 +115,7 @@ public class Trigger2Event : MonoBehaviour
         {
             graveReady = false;
             progress.AdvanceTo(GameProgress.GraveInspected);
-            StartCoroutine(GraveEndingSequence());
+            BeginPostGraveStory();
         }
     }
 
@@ -101,6 +131,10 @@ public class Trigger2Event : MonoBehaviour
         player = p.transform;
         playerBody = p.GetComponent<Rigidbody>();
     }
+
+    // ---------------------------------------------------------------------
+    // 前半：事件当日 → 数日後 → 宿泊客B
+    // ---------------------------------------------------------------------
 
     void BeginStoryInterlude()
     {
@@ -118,18 +152,7 @@ public class Trigger2Event : MonoBehaviour
 
     void HandleInterludeInput()
     {
-        if (Time.unscaledTime - panelShownAt < panelInputDelay)
-            return;
-
-        if (Keyboard.current == null)
-            return;
-
-        bool nextPressed =
-            Keyboard.current.eKey.wasPressedThisFrame ||
-            Keyboard.current.spaceKey.wasPressedThisFrame ||
-            Keyboard.current.enterKey.wasPressedThisFrame;
-
-        if (!nextPressed)
+        if (!NextPressed() || Time.unscaledTime - panelShownAt < panelInputDelay)
             return;
 
         storyPanel++;
@@ -173,6 +196,141 @@ public class Trigger2Event : MonoBehaviour
         guestBActive = true;
         graveReady = true;
     }
+
+    // ---------------------------------------------------------------------
+    // 後半：墓碑 → 宿泊 → 噂 → 就寝 → のっぺらぼう → 地獄
+    // ---------------------------------------------------------------------
+
+    void BeginPostGraveStory()
+    {
+        postStoryActive = true;
+        postStage = 0;
+        postStageShownAt = Time.unscaledTime;
+        progress.isStoryInterlude = true;
+
+        FreezePlayerControls();
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
+    void HandlePostStoryInput()
+    {
+        if (!NextPressed() || Time.unscaledTime - postStageShownAt < panelInputDelay)
+            return;
+
+        postStageShownAt = Time.unscaledTime;
+
+        switch (postStage)
+        {
+            case 0:
+                // 墓碑を読んだあと、旅館へ戻って受付へ。
+                postStage = 1;
+                break;
+
+            case 1:
+                // 宿泊手続きを実際の一操作として挟む。
+                progress.AdvanceTo(GameProgress.CheckIn);
+                postStage = 2;
+                break;
+
+            case 2:
+                progress.AdvanceTo(GameProgress.RumorTold);
+                postStage = 3;
+                break;
+
+            case 3:
+                progress.AdvanceTo(GameProgress.Bedtime);
+                postStage = 4;
+                break;
+
+            case 4:
+                progress.AdvanceTo(GameProgress.GhostAppears);
+                postStage = 5;
+                break;
+
+            case 5:
+                progress.AdvanceTo(GameProgress.DraggedToHell);
+                postStage = 6;
+                break;
+
+            default:
+                BeginChantMash();
+                break;
+        }
+    }
+
+    void BeginChantMash()
+    {
+        postStoryActive = false;
+        chantMashActive = true;
+        mashCount = 0;
+        mashTimeRemaining = Mathf.Max(3f, mashDuration);
+        progress.AdvanceTo(GameProgress.Chanting);
+    }
+
+    void HandleChantMash()
+    {
+        mashTimeRemaining -= Time.unscaledDeltaTime;
+
+        if (MashPressed())
+            mashCount++;
+
+        if (mashCount >= Mathf.Max(3, mashTargetPresses))
+        {
+            chantMashActive = false;
+            StartCoroutine(ReliefAndTruthSequence());
+            return;
+        }
+
+        if (mashTimeRemaining <= 0f)
+        {
+            // 失敗してもゲームオーバーにはせず、恐怖が終わらない演出として再挑戦させる。
+            mashCount = 0;
+            mashTimeRemaining = Mathf.Max(3f, mashDuration);
+            mashFailureFlashUntil = Time.unscaledTime + 0.9f;
+        }
+    }
+
+    IEnumerator ReliefAndTruthSequence()
+    {
+        ending = true;
+        progress.AdvanceTo(GameProgress.FalseRelief);
+
+        eventMessage = "……消えた。\n助かった……。";
+        yield return new WaitForSecondsRealtime(2.6f);
+
+        eventMessage = "静寂が戻る。\nもう、終わったはずだった。";
+        yield return new WaitForSecondsRealtime(2.1f);
+
+        progress.AdvanceTo(GameProgress.TruthReveal);
+        eventMessage = "『待つ叶う想』――";
+        yield return new WaitForSecondsRealtime(1.6f);
+
+        eventMessage = "それは、真っ赤な嘘だった。";
+        yield return new WaitForSecondsRealtime(3.4f);
+
+        eventMessage = "";
+
+        float duration = Mathf.Max(0.05f, fadeSeconds);
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            fadeAlpha = Mathf.Clamp01(elapsed / duration);
+            elapsed += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        fadeAlpha = 1f;
+        progress.isStoryInterlude = false;
+        progress.AdvanceTo(GameProgress.Cleared);
+        cleared = true;
+        Time.timeScale = 0f;
+    }
+
+    // ---------------------------------------------------------------------
+    // プレイヤー切替・操作制御
+    // ---------------------------------------------------------------------
 
     void FreezePlayerControls()
     {
@@ -230,6 +388,10 @@ public class Trigger2Event : MonoBehaviour
         Cursor.visible = false;
     }
 
+    // ---------------------------------------------------------------------
+    // 数日後の簡易旅館前・墓碑
+    // ---------------------------------------------------------------------
+
     void BuildAftermathExterior()
     {
         if (aftermathRoot != null)
@@ -241,10 +403,8 @@ public class Trigger2Event : MonoBehaviour
             floorY = originalFloor.transform.position.y;
 
         Vector3 anchor = new Vector3(40f, floorY, 0f);
-
         aftermathRoot = new GameObject("Aftermath_Exterior");
 
-        // 小さな旅館前だけを用意する。事件中の警察NPCや灰色の廊下は生成しない。
         CreateBlock("Exterior_Ground", anchor + new Vector3(0f, -0.1f, 0f),
             new Vector3(18f, 0.2f, 14f), new Color(0.18f, 0.18f, 0.17f));
 
@@ -261,11 +421,6 @@ public class Trigger2Event : MonoBehaviour
 
         CreateLantern(anchor + new Vector3(-1.7f, 1.7f, 4.5f));
         CreateLantern(anchor + new Vector3(1.7f, 1.7f, 4.5f));
-
-        CreateBlock("Fence_Left", anchor + new Vector3(-8f, 0.55f, 0f),
-            new Vector3(0.25f, 1.1f, 14f), new Color(0.11f, 0.1f, 0.09f));
-        CreateBlock("Fence_Right", anchor + new Vector3(8f, 0.55f, 0f),
-            new Vector3(0.25f, 1.1f, 14f), new Color(0.11f, 0.1f, 0.09f));
 
         guestBSpawn = anchor + new Vector3(0f, 1.05f, -4.5f);
         guestBRotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
@@ -350,49 +505,30 @@ public class Trigger2Event : MonoBehaviour
 
         Vector3 difference = player.position - graveRoot.transform.position;
         difference.y = 0f;
-
         return difference.sqrMagnitude <= graveInteractDistance * graveInteractDistance;
     }
 
-    IEnumerator GraveEndingSequence()
-    {
-        ending = true;
-        FreezePlayerControls();
-        Cursor.lockState = CursorLockMode.None;
-        Cursor.visible = true;
-
-        eventMessage = "墓碑には『待叶想』と刻まれている。";
-        yield return new WaitForSeconds(inscriptionSeconds);
-
-        eventMessage = "待つ。叶う。ソウ。";
-        yield return new WaitForSeconds(inscriptionSeconds);
-
-        eventMessage = "……真っ赤な嘘。";
-        yield return new WaitForSeconds(inscriptionSeconds);
-
-        eventMessage = "";
-
-        float duration = Mathf.Max(0.05f, fadeSeconds);
-        float elapsed = 0f;
-
-        while (elapsed < duration)
-        {
-            fadeAlpha = Mathf.Clamp01(elapsed / duration);
-            elapsed += Time.deltaTime;
-            yield return null;
-        }
-
-        fadeAlpha = 1f;
-        progress.AdvanceTo(GameProgress.Cleared);
-        cleared = true;
-        Time.timeScale = 0f;
-    }
+    // ---------------------------------------------------------------------
+    // GUI
+    // ---------------------------------------------------------------------
 
     void OnGUI()
     {
         if (interludeActive)
         {
-            DrawStoryInterlude();
+            DrawOpeningInterlude();
+            return;
+        }
+
+        if (postStoryActive)
+        {
+            DrawPostStory();
+            return;
+        }
+
+        if (chantMashActive)
+        {
+            DrawChantMash();
             return;
         }
 
@@ -415,16 +551,21 @@ public class Trigger2Event : MonoBehaviour
 
         if (ending && eventMessage != "")
         {
-            DrawRect(new Rect(0, 0, Screen.width, Screen.height), new Color(0f, 0f, 0f, 0.82f));
+            Color bg = progress != null && progress.storyStep >= GameProgress.TruthReveal
+                ? new Color(0.24f, 0f, 0f, 0.94f)
+                : new Color(0f, 0f, 0f, 0.90f);
+            DrawRect(new Rect(0, 0, Screen.width, Screen.height), bg);
 
             GUIStyle eventStyle = new GUIStyle(GUI.skin.box);
             eventStyle.alignment = TextAnchor.MiddleCenter;
-            eventStyle.fontSize = 26;
+            eventStyle.fontSize = 30;
+            eventStyle.fontStyle = FontStyle.Bold;
             eventStyle.wordWrap = true;
             eventStyle.normal.textColor = Color.white;
 
             GUI.Box(
-                new Rect(Screen.width * 0.15f, Screen.height * 0.42f, Screen.width * 0.7f, 90f),
+                new Rect(Screen.width * 0.12f, Screen.height * 0.39f,
+                    Screen.width * 0.76f, Screen.height * 0.20f),
                 eventMessage,
                 eventStyle);
         }
@@ -440,24 +581,20 @@ public class Trigger2Event : MonoBehaviour
 
         GUIStyle title = new GUIStyle(GUI.skin.label);
         title.alignment = TextAnchor.MiddleCenter;
-        title.fontSize = 32;
+        title.fontSize = 34;
         title.fontStyle = FontStyle.Bold;
         title.normal.textColor = Color.white;
 
-        GUI.Label(
-            new Rect(0, Screen.height * 0.35f, Screen.width, 60f),
-            "CLEAR",
-            title);
+        GUI.Label(new Rect(0, Screen.height * 0.33f, Screen.width, 65f),
+            "CLEAR", title);
 
         GUIStyle message = new GUIStyle(GUI.skin.label);
         message.alignment = TextAnchor.MiddleCenter;
-        message.fontSize = 20;
+        message.fontSize = 21;
         message.normal.textColor = Color.white;
 
-        GUI.Label(
-            new Rect(0, Screen.height * 0.45f, Screen.width, 50f),
-            "事件のあとに残ったものを見届けた。",
-            message);
+        GUI.Label(new Rect(0, Screen.height * 0.44f, Screen.width, 60f),
+            "『待つ叶う想』は、救いの言葉ではなかった。", message);
 
         if (GUI.Button(
             new Rect(Screen.width / 2f - 90f, Screen.height * 0.60f, 180f, 45f),
@@ -467,52 +604,131 @@ public class Trigger2Event : MonoBehaviour
         }
     }
 
-    void DrawStoryInterlude()
+    void DrawOpeningInterlude()
     {
         DrawRect(new Rect(0, 0, Screen.width, Screen.height), Color.black);
+        Rect art = MainArtRect();
+        DrawRect(art, new Color(0.055f, 0.055f, 0.065f));
+        DrawOpeningArtwork(art);
+        DrawStoryText(GetOpeningTitle(), GetOpeningCaption(), "E / Space / Enter：次へ");
+    }
 
+    void DrawPostStory()
+    {
+        DrawRect(new Rect(0, 0, Screen.width, Screen.height), Color.black);
+        Rect art = MainArtRect();
+        DrawRect(art, new Color(0.045f, 0.04f, 0.05f));
+        DrawPostArtwork(art);
+
+        string action = postStage == 1
+            ? "E / Space / Enter：宿泊手続きをする"
+            : postStage == 6
+                ? "E / Space / Enter：抗う"
+                : "E / Space / Enter：次へ";
+
+        DrawStoryText(GetPostTitle(), GetPostCaption(), action);
+    }
+
+    void DrawChantMash()
+    {
+        DrawRect(new Rect(0, 0, Screen.width, Screen.height), new Color(0.12f, 0f, 0f));
+        Rect art = MainArtRect();
+        DrawRect(art, new Color(0.035f, 0f, 0f));
+        DrawGhostAtBedside(art, true);
+        DrawHellHands(art);
+
+        GUIStyle title = new GUIStyle(GUI.skin.label);
+        title.alignment = TextAnchor.MiddleCenter;
+        title.fontSize = 34;
+        title.fontStyle = FontStyle.Bold;
+        title.normal.textColor = Color.white;
+        GUI.Label(new Rect(0, Screen.height * 0.05f, Screen.width, 50f),
+            "地獄へ引きずり込まれる――！", title);
+
+        int target = Mathf.Max(3, mashTargetPresses);
+        float ratio = Mathf.Clamp01((float)mashCount / target);
+
+        Rect barBg = new Rect(Screen.width * 0.18f, Screen.height * 0.72f,
+            Screen.width * 0.64f, 34f);
+        DrawRect(barBg, new Color(0.12f, 0.12f, 0.12f));
+        DrawRect(new Rect(barBg.x, barBg.y, barBg.width * ratio, barBg.height),
+            new Color(0.72f, 0.08f, 0.08f));
+
+        int third = Mathf.Max(1, Mathf.CeilToInt(target / 3f));
+        int chants = Mathf.Clamp(mashCount / third, 0, 3);
+        string chantText = "";
+        for (int i = 0; i < chants; i++)
+            chantText += (i == 0 ? "" : "\n") + "待つ叶う想";
+
+        GUIStyle chant = new GUIStyle(GUI.skin.label);
+        chant.alignment = TextAnchor.MiddleCenter;
+        chant.fontSize = 31;
+        chant.fontStyle = FontStyle.Bold;
+        chant.normal.textColor = Color.white;
+        GUI.Label(new Rect(Screen.width * 0.12f, Screen.height * 0.47f,
+            Screen.width * 0.76f, Screen.height * 0.20f), chantText, chant);
+
+        GUIStyle prompt = new GUIStyle(GUI.skin.box);
+        prompt.alignment = TextAnchor.MiddleCenter;
+        prompt.fontSize = 24;
+        prompt.fontStyle = FontStyle.Bold;
+        prompt.wordWrap = true;
+        prompt.normal.textColor = Color.white;
+
+        string warning = Time.unscaledTime < mashFailureFlashUntil
+            ? "まだ終わっていない！　もっと連打しろ！"
+            : "E / Space / Enter / 左クリックを連打！\n『待つ叶う想』を三度唱えろ！";
+
+        GUI.Box(new Rect(Screen.width * 0.16f, Screen.height * 0.79f,
+            Screen.width * 0.68f, 82f), warning, prompt);
+
+        GUIStyle timer = new GUIStyle(GUI.skin.label);
+        timer.alignment = TextAnchor.MiddleCenter;
+        timer.fontSize = 18;
+        timer.normal.textColor = Color.white;
+        GUI.Label(new Rect(0, Screen.height * 0.90f, Screen.width, 30f),
+            $"残り {Mathf.CeilToInt(mashTimeRemaining)} 秒", timer);
+    }
+
+    Rect MainArtRect()
+    {
         float artWidth = Mathf.Min(900f, Screen.width * 0.82f);
         float artHeight = Screen.height * 0.55f;
-        Rect art = new Rect((Screen.width - artWidth) * 0.5f, Screen.height * 0.08f, artWidth, artHeight);
+        return new Rect((Screen.width - artWidth) * 0.5f,
+            Screen.height * 0.08f, artWidth, artHeight);
+    }
 
-        DrawRect(art, new Color(0.055f, 0.055f, 0.065f));
-        DrawPanelArtwork(art);
+    void DrawStoryText(string titleText, string captionText, string actionText)
+    {
+        Rect art = MainArtRect();
 
         GUIStyle title = new GUIStyle(GUI.skin.label);
         title.alignment = TextAnchor.MiddleCenter;
         title.fontSize = 25;
         title.fontStyle = FontStyle.Bold;
         title.normal.textColor = Color.white;
-
-        GUI.Label(new Rect(0, art.y - 5f, Screen.width, 42f), GetPanelTitle(), title);
+        GUI.Label(new Rect(0, art.y - 5f, Screen.width, 42f), titleText, title);
 
         GUIStyle caption = new GUIStyle(GUI.skin.box);
         caption.alignment = TextAnchor.MiddleCenter;
-        caption.fontSize = 24;
+        caption.fontSize = 23;
         caption.wordWrap = true;
         caption.normal.textColor = Color.white;
-
-        Rect captionRect = new Rect(
-            Screen.width * 0.10f,
-            Screen.height * 0.68f,
-            Screen.width * 0.80f,
-            Screen.height * 0.17f);
-
-        GUI.Box(captionRect, GetPanelCaption(), caption);
+        GUI.Box(new Rect(Screen.width * 0.10f, Screen.height * 0.68f,
+            Screen.width * 0.80f, Screen.height * 0.17f), captionText, caption);
 
         GUIStyle next = new GUIStyle(GUI.skin.label);
         next.alignment = TextAnchor.MiddleCenter;
         next.fontSize = 17;
         next.normal.textColor = new Color(0.78f, 0.78f, 0.78f);
-
-        string nextText = Time.unscaledTime - panelShownAt >= panelInputDelay
-            ? "E / Space / Enter：次へ"
-            : "";
-
-        GUI.Label(new Rect(0, Screen.height * 0.87f, Screen.width, 35f), nextText, next);
+        GUI.Label(new Rect(0, Screen.height * 0.87f, Screen.width, 35f), actionText, next);
     }
 
-    void DrawPanelArtwork(Rect art)
+    // ---------------------------------------------------------------------
+    // 絵（簡易シルエット）
+    // ---------------------------------------------------------------------
+
+    void DrawOpeningArtwork(Rect art)
     {
         switch (storyPanel)
         {
@@ -522,7 +738,6 @@ public class Trigger2Event : MonoBehaviour
                     art.width * 0.12f, art.height * 0.045f), new Color(0.15f, 0.35f, 0.8f));
                 DrawRect(new Rect(art.x + art.width * 0.24f, art.y + art.height * 0.74f,
                     art.width * 0.12f, art.height * 0.045f), new Color(0.75f, 0.12f, 0.12f));
-
                 for (int i = 0; i < 8; i++)
                     DrawPerson(art, 0.10f + i * 0.105f, 0.70f, 0.055f, 0.22f);
                 break;
@@ -536,21 +751,11 @@ public class Trigger2Event : MonoBehaviour
 
             case 2:
                 DrawInnSilhouette(art);
-                GUIStyle clock = new GUIStyle(GUI.skin.label);
-                clock.alignment = TextAnchor.MiddleCenter;
-                clock.fontSize = 38;
-                clock.fontStyle = FontStyle.Bold;
-                clock.normal.textColor = new Color(0.7f, 0.7f, 0.72f);
-                GUI.Label(new Rect(art.x, art.y + art.height * 0.18f, art.width, 60f), "03:40", clock);
+                DrawLargeText(art, "03:40", 38, new Color(0.7f, 0.7f, 0.72f));
                 break;
 
             case 3:
-                GUIStyle days = new GUIStyle(GUI.skin.label);
-                days.alignment = TextAnchor.MiddleCenter;
-                days.fontSize = 52;
-                days.fontStyle = FontStyle.Bold;
-                days.normal.textColor = Color.white;
-                GUI.Label(art, "―― 数日後 ――", days);
+                DrawLargeText(art, "―― 数日後 ――", 52, Color.white);
                 break;
 
             default:
@@ -558,9 +763,89 @@ public class Trigger2Event : MonoBehaviour
                 DrawPerson(art, 0.43f, 0.72f, 0.10f, 0.34f);
                 DrawRect(new Rect(art.x + art.width * 0.70f, art.y + art.height * 0.62f,
                     art.width * 0.08f, art.height * 0.24f), new Color(0.28f, 0.28f, 0.3f));
-                DrawRect(new Rect(art.x + art.width * 0.675f, art.y + art.height * 0.82f,
-                    art.width * 0.13f, art.height * 0.05f), new Color(0.22f, 0.22f, 0.24f));
                 break;
+        }
+    }
+
+    void DrawPostArtwork(Rect art)
+    {
+        switch (postStage)
+        {
+            case 0:
+                DrawRect(new Rect(art.x + art.width * 0.45f, art.y + art.height * 0.22f,
+                    art.width * 0.10f, art.height * 0.52f), new Color(0.22f, 0.22f, 0.24f));
+                DrawRect(new Rect(art.x + art.width * 0.40f, art.y + art.height * 0.70f,
+                    art.width * 0.20f, art.height * 0.07f), new Color(0.16f, 0.16f, 0.18f));
+                DrawLargeText(new Rect(art.x, art.y + art.height * 0.30f,
+                    art.width, art.height * 0.25f), "待叶想", 46, Color.white);
+                break;
+
+            case 1:
+                DrawReception(art);
+                break;
+
+            case 2:
+            case 3:
+                DrawReception(art);
+                DrawPerson(art, 0.25f, 0.72f, 0.09f, 0.31f);
+                DrawPerson(art, 0.64f, 0.72f, 0.09f, 0.31f);
+                break;
+
+            case 4:
+                DrawBed(art);
+                break;
+
+            case 5:
+                DrawBed(art);
+                DrawGhostAtBedside(art, false);
+                break;
+
+            default:
+                DrawBed(art);
+                DrawGhostAtBedside(art, true);
+                DrawHellHands(art);
+                break;
+        }
+    }
+
+    void DrawReception(Rect art)
+    {
+        DrawRect(new Rect(art.x + art.width * 0.12f, art.y + art.height * 0.58f,
+            art.width * 0.76f, art.height * 0.18f), new Color(0.20f, 0.14f, 0.10f));
+        DrawRect(new Rect(art.x + art.width * 0.18f, art.y + art.height * 0.32f,
+            art.width * 0.64f, art.height * 0.06f), new Color(0.12f, 0.09f, 0.07f));
+    }
+
+    void DrawBed(Rect art)
+    {
+        DrawRect(new Rect(art.x + art.width * 0.16f, art.y + art.height * 0.55f,
+            art.width * 0.58f, art.height * 0.23f), new Color(0.16f, 0.14f, 0.15f));
+        DrawRect(new Rect(art.x + art.width * 0.17f, art.y + art.height * 0.48f,
+            art.width * 0.18f, art.height * 0.10f), new Color(0.42f, 0.40f, 0.40f));
+    }
+
+    void DrawGhostAtBedside(Rect art, threatening)
+    {
+        Color bodyColor = threatening
+            ? new Color(0.03f, 0.0f, 0.0f)
+            : new Color(0.04f, 0.04f, 0.045f);
+
+        DrawRect(new Rect(art.x + art.width * 0.72f, art.y + art.height * 0.34f,
+            art.width * 0.10f, art.height * 0.42f), bodyColor);
+
+        // 顔には目・鼻・口を描かない。「のっぺらぼう」を明示する。
+        DrawRect(new Rect(art.x + art.width * 0.715f, art.y + art.height * 0.20f,
+            art.width * 0.11f, art.height * 0.16f), new Color(0.78f, 0.76f, 0.72f));
+    }
+
+    void DrawHellHands(Rect art)
+    {
+        Color hand = new Color(0.22f, 0.01f, 0.01f);
+        for (int i = 0; i < 5; i++)
+        {
+            float x = 0.18f + i * 0.15f;
+            DrawRect(new Rect(art.x + art.width * x, art.y + art.height * 0.76f,
+                art.width * 0.055f, art.height * 0.22f), hand);
         }
     }
 
@@ -583,16 +868,27 @@ public class Trigger2Event : MonoBehaviour
             art.height * height);
 
         DrawRect(body, new Color(0.055f, 0.055f, 0.06f));
-
         float headSize = art.width * width * 0.72f;
-        DrawRect(new Rect(
-            body.x + body.width * 0.14f,
-            body.y - headSize * 0.82f,
-            headSize,
-            headSize), new Color(0.07f, 0.07f, 0.075f));
+        DrawRect(new Rect(body.x + body.width * 0.14f,
+            body.y - headSize * 0.82f, headSize, headSize),
+            new Color(0.07f, 0.07f, 0.075f));
     }
 
-    string GetPanelTitle()
+    void DrawLargeText(Rect rect, string text, int fontSize, Color color)
+    {
+        GUIStyle style = new GUIStyle(GUI.skin.label);
+        style.alignment = TextAnchor.MiddleCenter;
+        style.fontSize = fontSize;
+        style.fontStyle = FontStyle.Bold;
+        style.normal.textColor = color;
+        GUI.Label(rect, text, style);
+    }
+
+    // ---------------------------------------------------------------------
+    // テキスト
+    // ---------------------------------------------------------------------
+
+    string GetOpeningTitle()
     {
         switch (storyPanel)
         {
@@ -604,25 +900,87 @@ public class Trigger2Event : MonoBehaviour
         }
     }
 
-    string GetPanelCaption()
+    string GetOpeningCaption()
     {
         switch (storyPanel)
         {
             case 0:
                 return "通報から間もなく、警察と救急が到着した。\n旅館の周囲には野次馬まで集まり、現場は騒然となった。";
-
             case 1:
                 return "遺体を発見した宿泊客Aを含め、\nその場にいた宿泊客たちは一人ずつ事情を聞かれた。";
-
             case 2:
                 return "現場検証が終わったのは夜明け前だった。\n人々は旅館を離れ、事件当日の時間はここで途切れる。";
-
             case 3:
-                return "事件から数日が経った。\n旅館の外には、あの日には無かった墓碑が建てられていた。";
-
+                return "――数日後。\n旅館の外には、事件当日には無かった墓碑が建てられていた。";
             default:
                 return "事件を知らない別の宿泊客Bが、この旅館を訪れた。\nここから操作する人物は、遺体を発見した宿泊客Aとは別人である。";
         }
+    }
+
+    string GetPostTitle()
+    {
+        switch (postStage)
+        {
+            case 0: return "見覚えのない墓碑";
+            case 1: return "旅館の受付";
+            case 2: return "宿に残る噂";
+            case 3: return "待叶想";
+            case 4: return "その夜";
+            case 5: return "枕元";
+            default: return "逃げられない";
+        }
+    }
+
+    string GetPostCaption()
+    {
+        switch (postStage)
+        {
+            case 0:
+                return "墓碑には『待叶想』と刻まれている。\n読み方も意味も分からない。宿の者なら何か知っているかもしれない。";
+
+            case 1:
+                return "宿泊客Bは旅館へ戻り、受付に宿泊を申し出た。\n名前を書き、部屋の鍵を受け取る。";
+
+            case 2:
+                return "墓碑のことを尋ねると、受付の人間は一瞬だけ黙った。\nそして、この宿に昔から残る噂を話し始めた。";
+
+            case 3:
+                return "『待叶想』――“待つ・叶う・想”。\n夜、枕元に顔のない子供が立ったら、その言葉を三度唱えれば連れていかれずに済む。\n……この宿では、そう言い伝えられている。";
+
+            case 4:
+                return "その夜。\n噂を聞いた宿泊客Bは、用意された部屋で眠りについた。";
+
+            case 5:
+                return "夜中、気配で目が覚めた。\n枕元には――顔のない子供が立っていた。";
+
+            default:
+                return "身体が動かない。布団の下が底のない闇へ沈んでいく。\n子供の手が、宿泊客Bを地獄へ引きずり込もうとしている。\n噂の言葉を唱えるしかない――！";
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 入力・共通描画
+    // ---------------------------------------------------------------------
+
+    bool NextPressed()
+    {
+        if (Keyboard.current == null)
+            return false;
+
+        return Keyboard.current.eKey.wasPressedThisFrame ||
+               Keyboard.current.spaceKey.wasPressedThisFrame ||
+               Keyboard.current.enterKey.wasPressedThisFrame;
+    }
+
+    bool MashPressed()
+    {
+        bool keyboard = Keyboard.current != null &&
+            (Keyboard.current.eKey.wasPressedThisFrame ||
+             Keyboard.current.spaceKey.wasPressedThisFrame ||
+             Keyboard.current.enterKey.wasPressedThisFrame);
+
+        bool mouse = Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame;
+        return keyboard || mouse;
     }
 
     void DrawRect(Rect rect, Color color)
