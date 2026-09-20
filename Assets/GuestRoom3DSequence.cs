@@ -38,7 +38,6 @@ public class GuestRoom3DSequence : MonoBehaviour
     float mashTimeRemaining;
 
     string centerMessage = "";
-    bool showGhost;
     bool cleared;
 
     const float InteractDistance = 2.25f;
@@ -291,7 +290,6 @@ public class GuestRoom3DSequence : MonoBehaviour
         progress.AdvanceTo(GameProgress.GhostAppears);
         centerMessage = "夜中、気配で目が覚めた。\n枕元には――顔のない子供が立っていた。";
         screenDarkAlpha = 0.82f;
-        showGhost = true;
         stage = RoomStage.Ghost;
         stageStartedAt = Time.unscaledTime;
     }
@@ -301,7 +299,6 @@ public class GuestRoom3DSequence : MonoBehaviour
         progress.AdvanceTo(GameProgress.DraggedToHell);
         progress.AdvanceTo(GameProgress.Chanting);
 
-        showGhost = true;
         centerMessage = "身体が動かない。\n闇の底へ引きずり込まれる――！";
         screenDarkAlpha = 0.72f;
 
@@ -342,7 +339,6 @@ public class GuestRoom3DSequence : MonoBehaviour
     IEnumerator ReliefAndTruth()
     {
         progress.AdvanceTo(GameProgress.FalseRelief);
-        showGhost = false;
         centerMessage = "……消えた。\n助かった……。";
         screenDarkAlpha = 0.88f;
         yield return new WaitForSecondsRealtime(2.4f);
