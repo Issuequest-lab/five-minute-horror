@@ -9,34 +9,101 @@ html,body{margin:0;width:100%;height:100%;background:#030406;overflow:hidden}ifr
 </style>
 </head>
 <body>
-<iframe id="game" src="game.html?v=2" allow="autoplay"></iframe>
+<iframe id="game" src="game.html?v=3" allow="autoplay"></iframe>
 <script>
-// SoundBible "Female Scream Horror" by NeoPhyTe — Public Domain.
-// Use a stable GitHub raw mirror because direct SoundBible hotlinking can fail in browsers.
-const REAL_FEMALE_SCREAM='https://raw.githubusercontent.com/Hanson-Sun/http-server/main/test_resources/sounds/Female_Scream_Horror-NeoPhyTe-138499973.mp3';
+// Female Scream Horror / NeoPhyTe — Public Domain (SoundBible).
+// Keep the scream in the parent page and unlock it from the player's real gesture.
+const PRIMARY_FEMALE_SCREAM='https://raw.githubusercontent.com/Hanson-Sun/http-server/main/test_resources/sounds/Female_Scream_Horror-NeoPhyTe-138499973.mp3';
+const FALLBACK_FEMALE_SCREAM='https://soundbible.com/mp3/Female_Scream_Horror-NeoPhyTe-138499973.mp3';
+const femaleScream=new Audio(PRIMARY_FEMALE_SCREAM);
+femaleScream.preload='auto';
+femaleScream.volume=1;
+femaleScream.playbackRate=1;
+femaleScream.preservesPitch=true;
+femaleScream.onerror=()=>{
+  if(femaleScream.src!==FALLBACK_FEMALE_SCREAM){
+    femaleScream.onerror=null;
+    femaleScream.src=FALLBACK_FEMALE_SCREAM;
+    try{femaleScream.load();}catch(e){}
+  }
+};
+
+let femaleUnlocked=false;
+function unlockFemaleScream(){
+  if(femaleUnlocked) return;
+  try{
+    femaleScream.volume=.001;
+    femaleScream.currentTime=0;
+    const p=femaleScream.play();
+    if(p&&p.then){
+      p.then(()=>{
+        setTimeout(()=>{
+          femaleScream.pause();
+          femaleScream.currentTime=0;
+          femaleScream.volume=1;
+          femaleUnlocked=true;
+        },30);
+      }).catch(()=>{});
+    }
+  }catch(e){}
+}
+
+function playRealFemaleScream(){
+  try{
+    femaleScream.pause();
+    femaleScream.currentTime=0;
+    femaleScream.volume=1;
+    femaleScream.playbackRate=1;
+    femaleScream.preservesPitch=true;
+    femaleScream.mozPreservesPitch=true;
+    femaleScream.webkitPreservesPitch=true;
+    femaleScream.play().catch(()=>{});
+  }catch(e){}
+}
+
 const game=document.getElementById('game');
 game.addEventListener('load',()=>{
   const w=game.contentWindow;
   const d=game.contentDocument;
+
+  // A gesture inside an iframe does not bubble to the parent, so hook it directly.
+  ['pointerdown','touchstart','click'].forEach(type=>{
+    d.addEventListener(type,unlockFemaleScream,{passive:true,once:false});
+  });
+
+  // Disable every in-game vocal source. The only human scream is the final hit below.
   ['screamAudio','shortScreamAudio','longScreamAudio'].forEach(id=>{
     const a=d.getElementById(id);
     if(!a)return;
-    a.onerror=null;
-    a.src=REAL_FEMALE_SCREAM;
-    a.preload='auto';
-    try{a.load();}catch(e){}
+    try{a.pause();a.removeAttribute('src');a.load();}catch(e){}
   });
-  // Keep the female scream as the single final vocal hit, with a slightly higher pitch.
-  w.playVocal=function(which='short',vol=1,rate=1){
-    const a=d.getElementById(which==='long'?'longScreamAudio':which==='gasp'?'gaspAudio':'shortScreamAudio');
-    if(!a)return;
-    try{
-      a.pause();a.currentTime=0;a.volume=Math.max(0,Math.min(1,vol));
-      a.preservesPitch=false;a.mozPreservesPitch=false;a.webkitPreservesPitch=false;
-      a.playbackRate=(which==='short'?1.16:1.08)*rate;
-      a.play().catch(()=>{});
-    }catch(e){}
-  };
+  w.playVocal=function(){};
+
+  // Replace only the final flash scare: show the existing image first with the real woman scream,
+  // then add a restrained low hit 180 ms later so the voice stays intelligible.
+  const originalFlash=w.playFinalFlashScare;
+  if(typeof originalFlash==='function'){
+    w.playFinalFlashScare=function(){
+      const savedImpact=w.playImpact;
+      const savedVocal=w.playVocal;
+      w.playImpact=function(){};
+      w.playVocal=function(){};
+      try{ originalFlash(); }
+      finally{
+        w.playImpact=savedImpact;
+        w.playVocal=savedVocal;
+      }
+      playRealFemaleScream();
+      setTimeout(()=>{
+        try{
+          if(typeof w.tone==='function'){
+            w.tone(48,.22,.08,'sine',0);
+            w.tone(30,.65,.045,'sine',.02);
+          }
+        }catch(e){}
+      },180);
+    };
+  }
 });
 </script>
 </body>
